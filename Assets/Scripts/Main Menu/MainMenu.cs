@@ -27,6 +27,8 @@ public class MainMenu : MonoBehaviour
     [SerializeField] private Button startButton;
     
     [SerializeField] private GameObject mainMenuCanvas;
+    [SerializeField] private GameObject mainMenuPanel;
+    [SerializeField] private GameObject lobbyPanel;
     
     private string originalSceneName;
 
@@ -62,7 +64,6 @@ public class MainMenu : MonoBehaviour
         SteamMatchmaking.OnLobbyMemberDisconnected += (lobby, friend) => RefreshPlayerList();
     }
     
-    
 
     public void Quit()
     {
@@ -84,6 +85,10 @@ public class MainMenu : MonoBehaviour
     public void SetLobby(Lobby lobby)
     {
         currentLobby = lobby;
+
+        mainMenuPanel.SetActive(false);
+        lobbyPanel.SetActive(true);
+
         RefreshPlayerList();
 
         bool isHost = currentLobby.Owner.Id == SteamClient.SteamId;
@@ -132,21 +137,22 @@ public class MainMenu : MonoBehaviour
         inviteButton.interactable = !isFull;
     }
     
-    private bool GetReadyStateForSteamId(SteamId steamId)
+    private bool GetReadyStateForSteamId(Steamworks.SteamId steamId)
     {
         foreach (var state in FindObjectsByType<PlayerLobbyState>(FindObjectsSortMode.None))
         {
-            var mappedSteamId = SteamIdFromClientId(state.OwnerClientId);
-            if (mappedSteamId == steamId)
+            if (state.SteamId.Value == steamId.Value)
                 return state.IsReady.Value;
         }
         return false;
     }
     private void OnInviteClicked()
     {
+        Debug.Log($"OnInviteClicked called. currentLobby.Id = {currentLobby.Id}");
 
         if (currentLobby.Id == 0)
         {
+            Debug.LogWarning("No active lobby to invite to.");
             return;
         }
         SteamFriends.OpenGameInviteOverlay(currentLobby.Id);
@@ -161,11 +167,8 @@ public class MainMenu : MonoBehaviour
 
     private void OnLeaveClicked()
     {
-        if (currentLobby.Id == 0)
-        {
-            return;
-        }
-        
+        if (currentLobby.Id == 0) return;
+
         var localState = FindLocalPlayerLobbyState();
         if (localState != null && localState.IsReady.Value)
         {
@@ -180,15 +183,15 @@ public class MainMenu : MonoBehaviour
             NetworkManager.Singleton.Shutdown();
         }
 
-        
+        ResetToMainMenu();
     }
 
-    private SteamId SteamIdFromClientId(ulong clientId)
+    /*private SteamId SteamIdFromClientId(ulong clientId)
     {
         if (LobbyManager.Instance.ClientSteamIds.TryGetValue(clientId, out var steamId))
             return steamId;
         return default;
-    }
+    }*/
     
     private void OnReadyClicked()
     {
@@ -229,6 +232,13 @@ public class MainMenu : MonoBehaviour
                 SceneManager.UnloadSceneAsync(scene);
             }
         }
+    }
+    
+    public void ResetToMainMenu()
+    {
+        mainMenuCanvas.SetActive(true); 
+        lobbyPanel.SetActive(false);
+        mainMenuPanel.SetActive(true);
     }
     
     
