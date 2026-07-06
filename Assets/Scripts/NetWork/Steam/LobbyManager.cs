@@ -4,18 +4,26 @@ using Steamworks;
 using Steamworks.Data;
 using Unity.Netcode;
 using UnityEngine;
+using UnityEngine.SceneManagement; 
 using System.Collections.Generic;
-
 
 public class LobbyManager : MonoBehaviour
 {
     public static LobbyManager Instance { get; private set; }
     private Lobby currentLobby;
     public Dictionary<ulong, SteamId> ClientSteamIds { get; } = new Dictionary<ulong, SteamId>();
+    
+    public Lobby CurrentLobby => currentLobby;
+    
     [SerializeField] private GameObject lobbyPlayerStatePrefab;
 
     private void Awake()
     {
+        if (Instance != null && Instance != this)
+        {
+            Destroy(gameObject);
+            return;
+        }
         Instance = this;
 
         SteamMatchmaking.OnLobbyCreated += OnLobbyCreated;
@@ -64,7 +72,7 @@ public class LobbyManager : MonoBehaviour
     {
         if (result != Result.OK) return;
 
-        lobby.SetPrivate();
+        lobby.SetFriendsOnly();
         lobby.SetJoinable(true);
 
         currentLobby = lobby;
@@ -79,24 +87,49 @@ public class LobbyManager : MonoBehaviour
     
     private void OnLobbyEntered(Lobby lobby)
     {
+        Debug.Log($"OnLobbyEntered fired. Lobby Id = {lobby.Id}, IsHost = {NetworkManager.Singleton.IsHost}");
+
         currentLobby = lobby;
         NetworkManager.Singleton.NetworkConfig.ConnectionData = System.BitConverter.GetBytes(SteamClient.SteamId.Value);
 
         MainMenu.Instance.SetLobby(lobby);
 
-        if (NetworkManager.Singleton.IsHost) return;
+        if (NetworkManager.Singleton.IsHost)
+        {
+            Debug.Log("OnLobbyEntered: IsHost is true, returning early without StartClient.");
+            return;
+        }
 
         var facepunchTransport = NetworkManager.Singleton.GetComponent<FacepunchTransport>();
         facepunchTransport.targetSteamId = lobby.Owner.Id;
         NetworkManager.Singleton.StartClient();
+        Debug.Log("OnLobbyEntered: StartClient() called.");
 
         NetworkManager.Singleton.SceneManager.OnLoadEventCompleted += MainMenu.Instance.OnSceneLoadCompleted;
     }
-
     
     private void OnGameLobbyJoinRequested(Lobby lobby, SteamId id)
     {
+        Debug.Log($"OnGameLobbyJoinRequested fired. Lobby Id = {lobby.Id}, currently IsHost = {NetworkManager.Singleton.IsHost}, IsClient = {NetworkManager.Singleton.IsClient}");
+
+        LeaveCurrentSessionIfAny();
         lobby.Join();
+    }
+    private void LeaveCurrentSessionIfAny()
+    {
+        Debug.Log($"LeaveCurrentSessionIfAny called. currentLobby.Id = {currentLobby.Id}, IsHost = {NetworkManager.Singleton.IsHost}, IsClient = {NetworkManager.Singleton.IsClient}");
+
+        if (currentLobby.Id != 0)
+        {
+            currentLobby.Leave();
+        }
+
+        if (NetworkManager.Singleton.IsHost || NetworkManager.Singleton.IsClient)
+        {
+            NetworkManager.Singleton.Shutdown();
+        }
+
+        MainMenu.Instance.ResetToMainMenu();
     }
 
     public async Task<Lobby[]> GetLobbiesList()
@@ -110,6 +143,18 @@ public class LobbyManager : MonoBehaviour
         if (!NetworkManager.Singleton.IsServer) return;
 
         var instance = Instantiate(lobbyPlayerStatePrefab);
-        instance.GetComponent<NetworkObject>().SpawnWithOwnership(clientId);
+        var netObj = instance.GetComponent<NetworkObject>();
+        netObj.SpawnWithOwnership(clientId);
+
+        if (ClientSteamIds.TryGetValue(clientId, out var steamId))
+        {
+            instance.GetComponent<PlayerLobbyState>().SteamId.Value = steamId.Value;
+        }
     }
+    
+    public void ClearCurrentLobby()
+    {
+        currentLobby = default;
+    }
+    
 }
