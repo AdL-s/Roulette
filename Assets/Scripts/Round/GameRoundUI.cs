@@ -2,39 +2,103 @@ using TMPro;
 using Unity.Netcode;
 using UnityEngine;
 using UnityEngine.UI;
+using System.Collections;
+
 
 public class GameRoundUI : MonoBehaviour
 {
-    [SerializeField] private GameObject questionPanel; // the rectangle
+    [SerializeField] private GameObject questionPanel;
     [SerializeField] private TMP_Text questionText;
-    [SerializeField] private Button answerButton;
+    [SerializeField] private Button[] answerButtons;
+    [SerializeField] private TMP_Text[] answerButtonTexts;
+    [SerializeField] private Image[] answerButtonBackgrounds;
+    [SerializeField] private Image timerFillBar;
+
+    [SerializeField] private Color defaultColor = Color.white;
+    [SerializeField] private Color correctColor = Color.green;
+    [SerializeField] private Color wrongColor = Color.red;
 
     private void Start()
     {
-        answerButton.onClick.AddListener(OnAnswerClicked);
+        for (int i = 0; i < answerButtons.Length; i++)
+        {
+            int index = i;
+            answerButtons[i].onClick.AddListener(() => OnAnswerClicked(index));
+        }
 
-        RoundManager.Instance.CurrentQuestion.OnValueChanged += (_, _) => Refresh();
-        RoundManager.Instance.RoundOwnerClientId.OnValueChanged += (_, _) => Refresh();
-        RoundManager.Instance.CurrentPhase.OnValueChanged += (_, _) => Refresh();
+        StartCoroutine(WaitForRoundManagerAndInit());
+    }
 
-        Refresh();
+    private void Update()
+    {
+        if (RoundManager.Instance == null) return;
+        if (RoundManager.Instance.CurrentPhase.Value != GamePhase.Question) return;
+
+        double remaining = RoundManager.Instance.QuestionEndTime.Value - NetworkManager.Singleton.ServerTime.Time;
+        timerFillBar.fillAmount = Mathf.Clamp01((float)(remaining / RoundManager.Instance.QuestionDuration));
     }
 
     private void Refresh()
     {
-        bool isQuestionPhase = RoundManager.Instance.CurrentPhase.Value == GamePhase.Question;
-        questionPanel.SetActive(isQuestionPhase);
+        var phase = RoundManager.Instance.CurrentPhase.Value;
 
-        if (!isQuestionPhase) return; // nothing else to update while hidden
+        bool showPanel = phase == GamePhase.Question || phase == GamePhase.Reveal;
+        questionPanel.SetActive(showPanel);
+        if (!showPanel) return;
 
         questionText.text = RoundManager.Instance.CurrentQuestion.Value.ToString();
+        answerButtonTexts[0].text = RoundManager.Instance.AnswerA.Value.ToString();
+        answerButtonTexts[1].text = RoundManager.Instance.AnswerB.Value.ToString();
+        answerButtonTexts[2].text = RoundManager.Instance.AnswerC.Value.ToString();
+        answerButtonTexts[3].text = RoundManager.Instance.AnswerD.Value.ToString();
 
         bool isOwner = NetworkManager.Singleton.LocalClientId == RoundManager.Instance.RoundOwnerClientId.Value;
-        answerButton.gameObject.SetActive(isOwner);
+
+        if (phase == GamePhase.Question)
+        {
+            for (int i = 0; i < answerButtons.Length; i++)
+            {
+                answerButtons[i].gameObject.SetActive(isOwner);
+                answerButtons[i].interactable = true;
+                answerButtonBackgrounds[i].color = defaultColor;
+            }
+            timerFillBar.fillAmount = 1f;
+        }
+        else if (phase == GamePhase.Reveal)
+        {
+            int correctIndex = RoundManager.Instance.RevealedCorrectIndex.Value;
+            int chosenIndex = RoundManager.Instance.RevealedChosenIndex.Value;
+
+            for (int i = 0; i < answerButtons.Length; i++)
+            {
+                answerButtons[i].gameObject.SetActive(true); // show all so everyone sees the reveal
+                answerButtons[i].interactable = false;
+
+                if (i == correctIndex) answerButtonBackgrounds[i].color = correctColor;
+                else if (i == chosenIndex) answerButtonBackgrounds[i].color = wrongColor;
+                else answerButtonBackgrounds[i].color = defaultColor;
+            }
+        }
     }
 
-    private void OnAnswerClicked()
+    private void OnAnswerClicked(int index)
     {
-        RoundManager.Instance.SubmitAnswerServerRpc();
+        RoundManager.Instance.SubmitAnswerServerRpc(index);
+        foreach (var btn in answerButtons) btn.interactable = false;
+    }
+    
+    private IEnumerator WaitForRoundManagerAndInit()
+    {
+        while (RoundManager.Instance == null)
+        {
+            yield return null;
+        }
+
+        RoundManager.Instance.CurrentQuestion.OnValueChanged += (_, _) => Refresh();
+        RoundManager.Instance.RoundOwnerClientId.OnValueChanged += (_, _) => Refresh();
+        RoundManager.Instance.CurrentPhase.OnValueChanged += (_, _) => Refresh();
+        RoundManager.Instance.RevealedCorrectIndex.OnValueChanged += (_, _) => Refresh();
+
+        Refresh();
     }
 }
