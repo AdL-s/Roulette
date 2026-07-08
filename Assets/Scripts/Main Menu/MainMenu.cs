@@ -232,6 +232,13 @@ public class MainMenu : MonoBehaviour
                 SceneManager.UnloadSceneAsync(scene);
             }
         }
+        else if (sceneName == "MainMenu")
+        {
+            mainMenuCanvas.SetActive(true);
+            lobbyPanel.SetActive(true);
+            mainMenuPanel.SetActive(false);
+            RefreshPlayerList();
+        }
     }
     
     public void ResetToMainMenu()
