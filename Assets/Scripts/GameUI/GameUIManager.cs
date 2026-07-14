@@ -114,7 +114,7 @@ public class GameUIManager : MonoBehaviour
         }
 
         LobbyManager.Instance.ClearCurrentLobby();
-        MainMenu.Instance.ResetToMainMenu();
+        MainMenu.Instance.ResetToMainMenuLobby();
         SceneManager.LoadScene("MainMenu", LoadSceneMode.Single);
     }
 }

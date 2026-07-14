@@ -31,6 +31,19 @@ public class PlayerMovement : NetworkBehaviour
             yield return null;
         }
 
+        if (RoundManager.Instance.IsReady)
+        {
+            SubscribeAndRefresh();
+        }
+        else
+        {
+            RoundManager.Instance.OnReady += SubscribeAndRefresh;
+        }
+    }
+    
+    private void SubscribeAndRefresh()
+    {
+        Debug.Log($"[PlayerMovement] SubscribeAndRefresh called. IsHost={IsHost}, IsOwner={IsOwner}, RoundManager phase={RoundManager.Instance.CurrentPhase.Value}");
         RoundManager.Instance.CurrentPhase.OnValueChanged += OnPhaseChanged;
         RefreshFreezeState();
     }
@@ -46,6 +59,7 @@ public class PlayerMovement : NetworkBehaviour
 
     private void OnPhaseChanged(GamePhase oldPhase, GamePhase newPhase)
     {
+        Debug.Log($"[PlayerMovement] OnPhaseChanged: {oldPhase} -> {newPhase}. IsHost={IsHost}");
         RefreshFreezeState();
     }
 
@@ -55,6 +69,8 @@ public class PlayerMovement : NetworkBehaviour
         bool questionActive = RoundManager.Instance != null && RoundManager.Instance.CurrentPhase.Value == GamePhase.Question;
         bool paused = GameUIManager.Instance != null && GameUIManager.Instance.IsPaused;
         bool freeze = questionActive || paused;
+
+        Debug.Log($"[PlayerMovement] RefreshFreezeState: questionActive={questionActive}, paused={paused}, freeze={freeze}, IsHost={IsHost}");
 
         enabled = !freeze;
         Cursor.lockState = freeze ? CursorLockMode.None : CursorLockMode.Locked;
