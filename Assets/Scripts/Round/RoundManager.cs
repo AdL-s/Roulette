@@ -26,6 +26,12 @@ public class RoundManager : NetworkBehaviour
     private int loadCount = 0; // 1 = initial load, 2 = first reload, 3 = second reload, 4+ = heal starts
     
     private int currentActionToken = 0;
+    
+    private bool hasShotThisAction = false;
+    
+    
+    public bool IsReady { get; private set; }
+    public event System.Action OnReady;
 
     
 
@@ -63,8 +69,13 @@ public class RoundManager : NetworkBehaviour
         if (IsServer)
         {
             GenerateNewAmmo();
-            StartRound();
+            StartCoroutine(WaitForPlayersThenStartRound());
             NetworkManager.Singleton.OnClientDisconnectCallback += HandleClientDisconnected;
+        }
+        else
+        {
+            IsReady = true;
+            OnReady?.Invoke();
         }
     }
 
@@ -130,8 +141,8 @@ public class RoundManager : NetworkBehaviour
 
         if (answerIndex == correctAnswerIndex)
         {
-            Debug.Log($"Client {senderId} answered CORRECTLY, entering Action phase.");
             CurrentPhase.Value = GamePhase.Action;
+            hasShotThisAction = false; // reset for the new action phase
 
             currentActionToken++;
             int myActionToken = currentActionToken;
@@ -139,7 +150,6 @@ public class RoundManager : NetworkBehaviour
         }
         else
         {
-            Debug.Log($"Client {senderId} answered incorrectly.");
             RevealedCorrectIndex.Value = correctAnswerIndex;
             RevealedChosenIndex.Value = answerIndex;
             CurrentPhase.Value = GamePhase.Reveal;
@@ -234,17 +244,16 @@ public class RoundManager : NetworkBehaviour
 
         if (senderId != RoundOwnerClientId.Value) return;
         if (CurrentPhase.Value != GamePhase.Action) return;
+        if (hasShotThisAction) return; // blocks any further shots this action phase
 
         if (!NetworkManager.Singleton.ConnectedClients.TryGetValue(targetClientId, out var targetClient)) return;
         var targetObj = targetClient.PlayerObject;
         if (targetObj == null) return;
 
         var targetHealth = targetObj.GetComponent<PlayerHealth>();
-        if (targetHealth == null || targetHealth.IsDead.Value)
-        {
-            Debug.LogWarning("Cannot shoot a dead player.");
-            return;
-        }
+        if (targetHealth == null || targetHealth.IsDead.Value) return;
+
+        hasShotThisAction = true; // lock immediately, before any further processing
 
         bool isSelf = senderId == targetClientId;
         AmmoType ammo = PopNextAmmo();
@@ -253,14 +262,9 @@ public class RoundManager : NetworkBehaviour
         {
             case AmmoType.Live:
                 targetHealth.TakeDamage(1);
-                Debug.Log($"LIVE round: Client {senderId} hit {(isSelf ? "themselves" : $"Client {targetClientId}")}. Remaining lives: {targetHealth.Lives.Value}");
-                break;
-            case AmmoType.Blank:
-                Debug.Log($"BLANK round: Client {senderId} shot {(isSelf ? "themselves" : $"Client {targetClientId}")}, no effect.");
                 break;
             case AmmoType.Heal:
                 targetHealth.Heal(1);
-                Debug.Log($"HEAL round: Client {senderId} healed {(isSelf ? "themselves" : $"Client {targetClientId}")}. Lives now: {targetHealth.Lives.Value}");
                 break;
         }
 
@@ -302,11 +306,15 @@ public class RoundManager : NetworkBehaviour
 
         if (aliveIds.Count <= 1)
         {
-            Debug.Log($"[GameEnd check] Only {aliveIds.Count} player(s) alive. Game would end here.");
+            Debug.Log("Game over! Resetting lobby state and returning everyone to the lobby.");
 
-            // Disabled for testing purposes - uncomment when ready to test end-of-game flow:
-            // EndGameAndReturnToLobby();
-            // return true;
+            foreach (var state in FindObjectsByType<PlayerLobbyState>(FindObjectsSortMode.None))
+            {
+                state.ResetReadyClientRpc();
+            }
+
+            NetworkManager.Singleton.SceneManager.LoadScene("MainMenu", UnityEngine.SceneManagement.LoadSceneMode.Single);
+            return true;
         }
 
         return false;
@@ -321,5 +329,17 @@ public class RoundManager : NetworkBehaviour
     private List<ulong> GetAliveClientIds()
     {
         return NetworkManager.Singleton.ConnectedClientsIds.Where(IsClientAlive).ToList();
+    }
+    
+    private IEnumerator WaitForPlayersThenStartRound()
+    {
+        while (GetAliveClientIds().Count == 0)
+        {
+            yield return null;
+        }
+
+        StartRound();
+        IsReady = true;
+        OnReady?.Invoke();
     }
 }

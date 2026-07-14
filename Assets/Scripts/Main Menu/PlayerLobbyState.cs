@@ -20,12 +20,19 @@ public class PlayerLobbyState : NetworkBehaviour
         IsReady.OnValueChanged += (oldVal, newVal) =>
         {
             if (MainMenu.Instance != null) MainMenu.Instance.RefreshPlayerList();
+            if (IsOwner && MainMenu.Instance != null) MainMenu.Instance.UpdateReadyButtonText(newVal);
         };
 
         SteamId.OnValueChanged += (oldVal, newVal) =>
         {
             if (MainMenu.Instance != null) MainMenu.Instance.RefreshPlayerList();
         };
+    }
+    
+    [ClientRpc]
+    public void ResetReadyClientRpc()
+    {
+        if (IsOwner) IsReady.Value = false;
     }
 
     public void ToggleReady()

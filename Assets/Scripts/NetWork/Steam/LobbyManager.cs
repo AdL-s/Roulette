@@ -6,6 +6,7 @@ using Unity.Netcode;
 using UnityEngine;
 using UnityEngine.SceneManagement; 
 using System.Collections.Generic;
+using System.Linq;
 
 public class LobbyManager : MonoBehaviour
 {
@@ -14,6 +15,11 @@ public class LobbyManager : MonoBehaviour
     public Dictionary<ulong, SteamId> ClientSteamIds { get; } = new Dictionary<ulong, SteamId>();
     
     public Lobby CurrentLobby => currentLobby;
+    
+    private string pendingLobbyName;
+    private bool pendingFriendsOnly;
+    private bool pendingPrivate;
+
     
     [SerializeField] private GameObject lobbyPlayerStatePrefab;
 
@@ -49,20 +55,17 @@ public class LobbyManager : MonoBehaviour
         response.CreatePlayerObject = false; 
     }
 
-    public async void HostLobby()
+    public async void HostLobby(string lobbyName, bool friendsOnly, bool isPrivate)
     {
+        pendingLobbyName = string.IsNullOrWhiteSpace(lobbyName) ? "Lobby" : lobbyName;
+        pendingFriendsOnly = friendsOnly;
+        pendingPrivate = isPrivate;
+
         if (!SteamClient.IsValid)
         {
             Debug.LogWarning("SteamClient not valid, reinitializing...");
-            try
-            {
-                SteamClient.Init(480); // use your real AppID here
-            }
-            catch (System.Exception e)
-            {
-                Debug.LogError($"Failed to reinitialize SteamClient: {e.Message}");
-                return;
-            }
+            try { SteamClient.Init(480); }
+            catch (System.Exception e) { Debug.LogError($"Failed to reinitialize SteamClient: {e.Message}"); return; }
         }
 
         await SteamMatchmaking.CreateLobbyAsync(4);
@@ -72,11 +75,14 @@ public class LobbyManager : MonoBehaviour
     {
         if (result != Result.OK) return;
 
-        lobby.SetFriendsOnly();
+        if (pendingPrivate) lobby.SetPrivate();
+        else if (pendingFriendsOnly) lobby.SetFriendsOnly();
+        else lobby.SetPublic();
+
         lobby.SetJoinable(true);
+        lobby.SetData("name", pendingLobbyName);
 
         currentLobby = lobby;
-
         NetworkManager.Singleton.NetworkConfig.ConnectionData = System.BitConverter.GetBytes(SteamClient.SteamId.Value);
 
         MainMenu.Instance.SetLobby(lobby);
@@ -84,6 +90,7 @@ public class LobbyManager : MonoBehaviour
 
         NetworkManager.Singleton.SceneManager.OnLoadEventCompleted += MainMenu.Instance.OnSceneLoadCompleted;
     }
+
     
     private void OnLobbyEntered(Lobby lobby)
     {
@@ -108,13 +115,60 @@ public class LobbyManager : MonoBehaviour
         NetworkManager.Singleton.SceneManager.OnLoadEventCompleted += MainMenu.Instance.OnSceneLoadCompleted;
     }
     
+    public void JoinLobbyDirect(Lobby lobby)
+    {
+        LeaveCurrentSessionIfAny();
+        lobby.Join();
+    }
+    
+    public async void JoinByCode(string code)
+    {
+        if (!LobbyCodeUtility.TryDecode(code, out ulong lobbyIdValue))
+        {
+            MainMenu.Instance.ShowJoinError("Invalid code format.");
+            return;
+        }
+
+        LeaveCurrentSessionIfAny();
+
+        var result = await SteamMatchmaking.JoinLobbyAsync(lobbyIdValue);
+        if (result == null)
+        {
+            Debug.LogWarning("JoinLobbyAsync returned null - lobby may not exist or is unreachable.");
+            MainMenu.Instance.ShowJoinError("Could not join lobby.");
+        }
+      
+    }
+    
+    public async Task<List<Lobby>> SearchLobbies(string nameFilter = null)
+    {
+        var lobbies = await SteamMatchmaking.LobbyList.RequestAsync();
+        if (lobbies == null) return new List<Lobby>();
+
+        var list = lobbies.ToList();
+        if (!string.IsNullOrWhiteSpace(nameFilter))
+        {
+            list = list.Where(l =>
+                (l.GetData("name") ?? "").IndexOf(nameFilter, System.StringComparison.OrdinalIgnoreCase) >= 0
+            ).ToList();
+        }
+        return list;
+    }
+    
     private void OnGameLobbyJoinRequested(Lobby lobby, SteamId id)
     {
         Debug.Log($"OnGameLobbyJoinRequested fired. Lobby Id = {lobby.Id}, currently IsHost = {NetworkManager.Singleton.IsHost}, IsClient = {NetworkManager.Singleton.IsClient}");
 
+        if (NetworkManager.Singleton.IsHost)
+        {
+            Debug.LogWarning("Ignoring OnGameLobbyJoinRequested while already hosting - this is a stray/duplicate Steam event, not a real join action.");
+            return;
+        }
+
         LeaveCurrentSessionIfAny();
         lobby.Join();
     }
+    
     private void LeaveCurrentSessionIfAny()
     {
         Debug.Log($"LeaveCurrentSessionIfAny called. currentLobby.Id = {currentLobby.Id}, IsHost = {NetworkManager.Singleton.IsHost}, IsClient = {NetworkManager.Singleton.IsClient}");
@@ -129,7 +183,7 @@ public class LobbyManager : MonoBehaviour
             NetworkManager.Singleton.Shutdown();
         }
 
-        MainMenu.Instance.ResetToMainMenu();
+        MainMenu.Instance.ResetToMainMenuLobby();
     }
 
     public async Task<Lobby[]> GetLobbiesList()
@@ -155,6 +209,17 @@ public class LobbyManager : MonoBehaviour
     public void ClearCurrentLobby()
     {
         currentLobby = default;
+    }
+    
+    public void SetLobbyPrivate(bool isPrivate)
+    {
+        if (currentLobby.Id == 0) return;
+        if (currentLobby.Owner.Id != SteamClient.SteamId) return; // safety: only host can change this
+
+        if (isPrivate) currentLobby.SetPrivate();
+        else currentLobby.SetPublic();
+
+        Debug.Log($"Lobby visibility set to {(isPrivate ? "Private" : "Public")}.");
     }
     
 }
