@@ -22,6 +22,7 @@ Shader "Custom/Default"
                 
         [Header(Emission)]
         [HDR]_Emission("Emission", Color) = (0,0,0,1)
+        _EmissionIntensity("Emission Intensity", Range(0,5)) = 0
     }
     SubShader
     {
@@ -50,6 +51,7 @@ Shader "Custom/Default"
         float _NormalStrength;
         
         float4 _Emission;
+        float _EmissionIntensity;
         
         float _globalSmoothness;
         float _globalOverWriteSmoothness;
@@ -76,6 +78,7 @@ Shader "Custom/Default"
            
             
             #ifdef  NORMAL_FIX
+            
             if (IN.facing > 0)
             {
                 o.Normal = n;
@@ -100,7 +103,7 @@ Shader "Custom/Default"
                 
             #endif
         
-           
+            o.Emission = _Emission * _EmissionIntensity;
             o.Metallic = _Metallic;
             o.Alpha = c.a;
             clip(c.a - _Cutoff);
