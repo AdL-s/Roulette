@@ -9,6 +9,7 @@ using TMPro;
 using Unity.Netcode;
 using Color = UnityEngine.Color;
 using System.Linq;
+using System.Collections;
 
 public class MainMenu : MonoBehaviour
 {
@@ -39,6 +40,7 @@ public class MainMenu : MonoBehaviour
     
     [SerializeField] private TMP_InputField searchInput;
     [SerializeField] private Transform serverListContainer;
+    [SerializeField] private RectTransform contentRectTransform;
     [SerializeField] private GameObject serverRowPrefab;
     
     [SerializeField] private Button refreshButton;
@@ -54,6 +56,12 @@ public class MainMenu : MonoBehaviour
     [Header("Lobby id buttons / toggles")]
     [SerializeField] private Button copyCodeButton;
     [SerializeField] private Toggle showCodeToggle;
+    
+    [Header("Lobby name")]
+    [SerializeField] private TMP_InputField lobbyNameInput;
+    [SerializeField] private float lobbyNameCommitDelay = 0.5f;
+
+    private Coroutine lobbyNameCommitRoutine;
 
     private string originalSceneName;
     private Lobby currentLobby;
@@ -100,6 +108,10 @@ public class MainMenu : MonoBehaviour
         showCodeToggle.onValueChanged.AddListener(OnShowCodeToggleChanged);
         showCodeToggle.SetIsOnWithoutNotify(false);
         
+        lobbyNameInput.characterLimit = 32;
+        lobbyNameInput.onValueChanged.AddListener(OnLobbyNameChanged);
+        
+        SteamMatchmaking.OnLobbyDataChanged += OnLobbyDataChanged;
         SteamMatchmaking.OnLobbyMemberJoined += (lobby, friend) => RefreshPlayerList();
         SteamMatchmaking.OnLobbyMemberLeave += (lobby, friend) => RefreshPlayerList();
         SteamMatchmaking.OnLobbyMemberDisconnected += (lobby, friend) => RefreshPlayerList();
@@ -116,6 +128,7 @@ public class MainMenu : MonoBehaviour
         mainMenuPanel.SetActive(false);
         joinPanel.SetActive(true);
         joinErrorText.gameObject.SetActive(false);
+        LayoutRebuilder.ForceRebuildLayoutImmediate(contentRectTransform);
         _ = RefreshServerList();
     }
 
@@ -185,6 +198,8 @@ public class MainMenu : MonoBehaviour
         if (isHost)
         {
             privateToggle.SetIsOnWithoutNotify(false);
+            lobbyNameInput.SetTextWithoutNotify(string.IsNullOrEmpty(lobby.GetData("name")) ? "Lobby" : lobby.GetData("name"));
+            lobbyNameInput.interactable = isHost;
         }
 
         UpdateInviteButtonState();
@@ -340,6 +355,32 @@ public class MainMenu : MonoBehaviour
     private void OnPrivateToggleChanged(bool isPrivate)
     {
         LobbyManager.Instance.SetLobbyPrivate(isPrivate);
+    }
+    private void OnLobbyNameChanged(string newText)
+    {
+        if (currentLobby.Id == 0) return;
+        if (currentLobby.Owner.Id != SteamClient.SteamId) return; // safety net; field is non-interactable for non-hosts anyway
+
+        if (lobbyNameCommitRoutine != null) StopCoroutine(lobbyNameCommitRoutine);
+        lobbyNameCommitRoutine = StartCoroutine(CommitLobbyNameAfterDelay(newText));
+    }
+
+    private IEnumerator CommitLobbyNameAfterDelay(string newName)
+    {
+        yield return new WaitForSeconds(lobbyNameCommitDelay);
+        LobbyManager.Instance.SetLobbyName(newName);
+        lobbyNameCommitRoutine = null;
+    }
+
+    private void OnLobbyDataChanged(Lobby lobby)
+    {
+        if (lobby.Id != currentLobby.Id) return;
+
+        string name = lobby.GetData("name");
+        if (!string.IsNullOrEmpty(name) && lobbyNameInput.text != name)
+            lobbyNameInput.SetTextWithoutNotify(name);
+
+        if (joinPanel.activeSelf) _ = RefreshServerList(); // keeps the server browser fresh while it's open
     }
     
     private void OnShowCodeToggleChanged(bool show)

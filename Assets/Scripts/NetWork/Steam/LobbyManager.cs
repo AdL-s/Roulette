@@ -221,5 +221,13 @@ public class LobbyManager : MonoBehaviour
 
         Debug.Log($"Lobby visibility set to {(isPrivate ? "Private" : "Public")}.");
     }
+    public void SetLobbyName(string name)
+    {
+        if (currentLobby.Id == 0) return;
+        if (currentLobby.Owner.Id != SteamClient.SteamId) return; // only host can rename
+
+        string safeName = string.IsNullOrWhiteSpace(name) ? "Lobby" : name.Trim();
+        currentLobby.SetData("name", safeName);
+    }
     
 }

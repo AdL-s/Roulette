@@ -38,7 +38,18 @@ public class PlayerCombat : NetworkBehaviour
         if (Physics.Raycast(ray, out RaycastHit hit, maxShootDistance, shootableLayers))
         {
             if (!hit.collider.CompareTag("Player")) return;
+            var highlight = hit.collider.GetComponentInParent<HighLight_Controller>();
 
+            if (highlight.block.GetFloat("_EmissionIntensity") >= 5.0)
+            {
+                return;
+                
+            }else if (highlight.block.GetFloat("_EmissionIntensity") < 5.0)
+            {
+                highlight.block.SetFloat("_EmissionIntensity", highlight.block.GetFloat("_EmissionIntensity") + 1 * Time.deltaTime  ) ;
+            }
+            
+            
             var targetNetObj = hit.collider.GetComponentInParent<NetworkObject>();
             if (targetNetObj == null) return;
             if (targetNetObj.OwnerClientId == NetworkManager.Singleton.LocalClientId) return; // LMB can't hit self, use RMB for that
