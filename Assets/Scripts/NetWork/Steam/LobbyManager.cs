@@ -61,12 +61,7 @@ public class LobbyManager : MonoBehaviour
         pendingFriendsOnly = friendsOnly;
         pendingPrivate = isPrivate;
 
-        if (!SteamClient.IsValid)
-        {
-            Debug.LogWarning("SteamClient not valid, reinitializing...");
-            try { SteamClient.Init(480); }
-            catch (System.Exception e) { Debug.LogError($"Failed to reinitialize SteamClient: {e.Message}"); return; }
-        }
+        SteamManager.Instance.EnsureInitialized();
 
         await SteamMatchmaking.CreateLobbyAsync(4);
     }
@@ -139,6 +134,14 @@ public class LobbyManager : MonoBehaviour
         }
       
     }
+
+    // Single public entry point for "leave whatever lobby/session we're currently in".
+    // UI code (e.g. the Leave button) should call this instead of poking NetworkManager/Lobby
+    // directly, so the cleanup (including reinitializing Steam - see below) only lives in one place.
+    public void LeaveLobby()
+    {
+        LeaveCurrentSessionIfAny();
+    }
     
     public async Task<List<Lobby>> SearchLobbies(string nameFilter = null)
     {
@@ -181,14 +184,20 @@ public class LobbyManager : MonoBehaviour
         if (NetworkManager.Singleton.IsHost || NetworkManager.Singleton.IsClient)
         {
             NetworkManager.Singleton.Shutdown();
+
+            // FacepunchTransport.Shutdown() calls SteamClient.Shutdown() as part of tearing down
+            // the network session. That kills the global Steam client, which breaks everything
+            // that needs Steam afterwards (lobby browser, invites, etc.) - so bring it back up.
+            SteamManager.Instance.EnsureInitialized();
         }
 
+        ClearCurrentLobby();
         MainMenu.Instance.ResetToMainMenuLobby();
     }
 
     public async Task<Lobby[]> GetLobbiesList()
     {
-        if (!SteamClient.IsValid) SteamClient.Init(480);
+        SteamManager.Instance.EnsureInitialized();
         return await SteamMatchmaking.LobbyList.RequestAsync();
     }
     
@@ -220,14 +229,6 @@ public class LobbyManager : MonoBehaviour
         else currentLobby.SetPublic();
 
         Debug.Log($"Lobby visibility set to {(isPrivate ? "Private" : "Public")}.");
-    }
-    public void SetLobbyName(string name)
-    {
-        if (currentLobby.Id == 0) return;
-        if (currentLobby.Owner.Id != SteamClient.SteamId) return; // only host can rename
-
-        string safeName = string.IsNullOrWhiteSpace(name) ? "Lobby" : name.Trim();
-        currentLobby.SetData("name", safeName);
     }
     
 }
