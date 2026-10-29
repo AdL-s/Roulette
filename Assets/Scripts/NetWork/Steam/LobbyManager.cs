@@ -4,7 +4,7 @@ using Steamworks;
 using Steamworks.Data;
 using Unity.Netcode;
 using UnityEngine;
-using UnityEngine.SceneManagement; 
+using UnityEngine.SceneManagement;
 using System.Collections.Generic;
 using System.Linq;
 
@@ -13,14 +13,17 @@ public class LobbyManager : MonoBehaviour
     public static LobbyManager Instance { get; private set; }
     private Lobby currentLobby;
     public Dictionary<ulong, SteamId> ClientSteamIds { get; } = new Dictionary<ulong, SteamId>();
-    
+
+    public const int MaxPlayers = 4;
+    public bool IsGameInProgress { get; private set; }
+
     public Lobby CurrentLobby => currentLobby;
-    
+
     private string pendingLobbyName;
     private bool pendingFriendsOnly;
     private bool pendingPrivate;
 
-    
+
     [SerializeField] private GameObject lobbyPlayerStatePrefab;
 
     private void Awake()
@@ -30,6 +33,7 @@ public class LobbyManager : MonoBehaviour
             Destroy(gameObject);
             return;
         }
+
         Instance = this;
 
         SteamMatchmaking.OnLobbyCreated += OnLobbyCreated;
@@ -38,32 +42,84 @@ public class LobbyManager : MonoBehaviour
             Debug.Log($"{friend.Name} joined the lobby");
         SteamFriends.OnGameLobbyJoinRequested += OnGameLobbyJoinRequested;
     }
-    
+
     private void Start()
     {
         NetworkManager.Singleton.NetworkConfig.ConnectionApproval = true;
         NetworkManager.Singleton.ConnectionApprovalCallback = ApprovalCheck;
         NetworkManager.Singleton.OnClientConnectedCallback += HandleClientConnected;
+        NetworkManager.Singleton.OnClientDisconnectCallback += HandleClientDisconnected;
     }
-    
-    private void ApprovalCheck(NetworkManager.ConnectionApprovalRequest request, NetworkManager.ConnectionApprovalResponse response)
+
+    private void ApprovalCheck(NetworkManager.ConnectionApprovalRequest request,
+        NetworkManager.ConnectionApprovalResponse response)
     {
+        response.CreatePlayerObject = false;
+
+        if (request.Payload == null || request.Payload.Length < sizeof(ulong))
+        {
+            Reject(response, "Invalid connection data.");
+            return;
+        }
+
+        if (IsGameInProgress)
+        {
+            Reject(response, "Game already in progress.");
+            return;
+        }
+
+        if (NetworkManager.Singleton.ConnectedClientsIds.Count >= MaxPlayers)
+        {
+            Reject(response, "Lobby is full.");
+            return;
+        }
+
         ulong steamIdRaw = System.BitConverter.ToUInt64(request.Payload, 0);
         ClientSteamIds[request.ClientNetworkId] = new SteamId { Value = steamIdRaw };
-
         response.Approved = true;
-        response.CreatePlayerObject = false; 
+    }
+
+    private static void Reject(NetworkManager.ConnectionApprovalResponse response, string reason)
+    {
+        response.Approved = false;
+        response.Reason = reason;
+    }
+
+    public void SetGameInProgress(bool inProgress)
+    {
+        IsGameInProgress = inProgress;
+
+        if (!SteamClient.IsValid || currentLobby.Id == 0) return;
+        if (currentLobby.Owner.Id != SteamClient.SteamId) return;
+        currentLobby.SetJoinable(!inProgress);
+    }
+
+    private void HandleClientDisconnected(ulong clientId)
+    {
+        if (NetworkManager.Singleton.IsServer)
+        {
+            ClientSteamIds.Remove(clientId);
+            return;
+        }
+
+        // Client side: this client lost its connection (host left, rejected, kicked)
+        Debug.Log($"Disconnected from host: {NetworkManager.Singleton.DisconnectReason}");
+        LeaveCurrentSessionIfAny();
+
+        if (UnityEngine.SceneManagement.SceneManager.GetActiveScene().name == "GameScene")
+            UnityEngine.SceneManagement.SceneManager.LoadScene("MainMenu", LoadSceneMode.Single);
     }
 
     public async void HostLobby(string lobbyName, bool friendsOnly, bool isPrivate)
     {
+        IsGameInProgress = false;
         pendingLobbyName = string.IsNullOrWhiteSpace(lobbyName) ? "Lobby" : lobbyName;
         pendingFriendsOnly = friendsOnly;
         pendingPrivate = isPrivate;
 
         SteamManager.Instance.EnsureInitialized();
 
-        await SteamMatchmaking.CreateLobbyAsync(4);
+        await SteamMatchmaking.CreateLobbyAsync(MaxPlayers);
     }
 
     private void OnLobbyCreated(Result result, Lobby lobby)
@@ -86,7 +142,7 @@ public class LobbyManager : MonoBehaviour
         NetworkManager.Singleton.SceneManager.OnLoadEventCompleted += MainMenu.Instance.OnSceneLoadCompleted;
     }
 
-    
+
     private void OnLobbyEntered(Lobby lobby)
     {
         Debug.Log($"OnLobbyEntered fired. Lobby Id = {lobby.Id}, IsHost = {NetworkManager.Singleton.IsHost}");
@@ -109,13 +165,13 @@ public class LobbyManager : MonoBehaviour
 
         NetworkManager.Singleton.SceneManager.OnLoadEventCompleted += MainMenu.Instance.OnSceneLoadCompleted;
     }
-    
+
     public void JoinLobbyDirect(Lobby lobby)
     {
         LeaveCurrentSessionIfAny();
         lobby.Join();
     }
-    
+
     public async void JoinByCode(string code)
     {
         if (!LobbyCodeUtility.TryDecode(code, out ulong lobbyIdValue))
@@ -132,7 +188,6 @@ public class LobbyManager : MonoBehaviour
             Debug.LogWarning("JoinLobbyAsync returned null - lobby may not exist or is unreachable.");
             MainMenu.Instance.ShowJoinError("Could not join lobby.");
         }
-      
     }
 
     // Single public entry point for "leave whatever lobby/session we're currently in".
@@ -142,7 +197,7 @@ public class LobbyManager : MonoBehaviour
     {
         LeaveCurrentSessionIfAny();
     }
-    
+
     public async Task<List<Lobby>> SearchLobbies(string nameFilter = null)
     {
         var lobbies = await SteamMatchmaking.LobbyList.RequestAsync();
@@ -155,26 +210,30 @@ public class LobbyManager : MonoBehaviour
                 (l.GetData("name") ?? "").IndexOf(nameFilter, System.StringComparison.OrdinalIgnoreCase) >= 0
             ).ToList();
         }
+
         return list;
     }
-    
+
     private void OnGameLobbyJoinRequested(Lobby lobby, SteamId id)
     {
-        Debug.Log($"OnGameLobbyJoinRequested fired. Lobby Id = {lobby.Id}, currently IsHost = {NetworkManager.Singleton.IsHost}, IsClient = {NetworkManager.Singleton.IsClient}");
+        Debug.Log(
+            $"OnGameLobbyJoinRequested fired. Lobby Id = {lobby.Id}, currently IsHost = {NetworkManager.Singleton.IsHost}, IsClient = {NetworkManager.Singleton.IsClient}");
 
         if (NetworkManager.Singleton.IsHost)
         {
-            Debug.LogWarning("Ignoring OnGameLobbyJoinRequested while already hosting - this is a stray/duplicate Steam event, not a real join action.");
+            Debug.LogWarning(
+                "Ignoring OnGameLobbyJoinRequested while already hosting - this is a stray/duplicate Steam event, not a real join action.");
             return;
         }
 
         LeaveCurrentSessionIfAny();
         lobby.Join();
     }
-    
+
     private void LeaveCurrentSessionIfAny()
     {
-        Debug.Log($"LeaveCurrentSessionIfAny called. currentLobby.Id = {currentLobby.Id}, IsHost = {NetworkManager.Singleton.IsHost}, IsClient = {NetworkManager.Singleton.IsClient}");
+        Debug.Log(
+            $"LeaveCurrentSessionIfAny called. currentLobby.Id = {currentLobby.Id}, IsHost = {NetworkManager.Singleton.IsHost}, IsClient = {NetworkManager.Singleton.IsClient}");
 
         if (currentLobby.Id != 0)
         {
@@ -200,7 +259,7 @@ public class LobbyManager : MonoBehaviour
         SteamManager.Instance.EnsureInitialized();
         return await SteamMatchmaking.LobbyList.RequestAsync();
     }
-    
+
     private void HandleClientConnected(ulong clientId)
     {
         if (!NetworkManager.Singleton.IsServer) return;
@@ -214,12 +273,12 @@ public class LobbyManager : MonoBehaviour
             instance.GetComponent<PlayerLobbyState>().SteamId.Value = steamId.Value;
         }
     }
-    
+
     public void ClearCurrentLobby()
     {
         currentLobby = default;
     }
-    
+
     public void SetLobbyPrivate(bool isPrivate)
     {
         if (currentLobby.Id == 0) return;
@@ -230,5 +289,4 @@ public class LobbyManager : MonoBehaviour
 
         Debug.Log($"Lobby visibility set to {(isPrivate ? "Private" : "Public")}.");
     }
-    
 }

@@ -1,54 +1,88 @@
 using System.Collections;
+using System.Collections.Generic;
 using Unity.Collections;
 using Unity.Netcode;
 using UnityEngine;
-using System.Collections.Generic;
-using System.Linq;
 
 public enum GamePhase
 {
     Question,
-    Reveal,   // wrong answer - show correct answer highlighted for a few seconds
-    Action,   // correct answer - placeholder for the next round phase, implement later
-    Waiting   // brief gap after a timeout before the next round
+    Reveal, // wrong answer - show correct answer for a few seconds
+    Action, // correct answer - owner shoots or uses items
+    Waiting, // short gap before the next round
+    GameOver // someone reached the winning points (or everyone else left)
 }
 
 public class RoundManager : NetworkBehaviour
 {
     public static RoundManager Instance { get; private set; }
 
-    [SerializeField] private float questionDuration = 15f;
+    public enum AmmoType
+    {
+        Blank,
+        Live,
+        Heal
+    }
+
+    [Header("Timing")] [SerializeField] private float questionDuration = 15f;
     [SerializeField] private float revealDuration = 3f;
-    [SerializeField] private float actionDuration = 60f; 
-    public enum AmmoType { Blank, Live, Heal }
-    
-    private List<AmmoType> ammoQueue = new();
-    private int loadCount = 0; // 1 = initial load, 2 = first reload, 3 = second reload, 4+ = heal starts
-    
-    private int currentActionToken = 0;
-    
-    private bool hasShotThisAction = false;
-    
-    
+    [SerializeField] private float actionDuration = 60f;
+    [SerializeField] private float shotResultDuration = 1.5f;
+    [SerializeField] private float gameOverDuration = 4f;
+
+    [Header("Points")] [SerializeField, Min(0)]
+    private int startingPoints = 250;
+
+    [SerializeField, Min(1)] private int winningPoints = 1000;
+    [SerializeField, Min(0)] private int pointsForCorrectAnswer = 125;
+    [SerializeField, Min(0)] private int pointsLostOnHit = 125;
+    [SerializeField, Min(0)] private int pointsGainedOnHeal = 125;
+
+    [Header("Ammo chances (weights, normalized automatically: 35/5/60 = 35%/5%/60%)")] [SerializeField, Min(0f)]
+    private float blankChance = 35f;
+
+    [SerializeField, Min(0f)] private float healChance = 5f;
+    [SerializeField, Min(0f)] private float liveChance = 60f;
+
     public bool IsReady { get; private set; }
     public event System.Action OnReady;
 
-    
+    public NetworkVariable<int> RoundNumber =
+        new(1, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
 
-    public NetworkVariable<int> RoundNumber = new(1, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
-    public NetworkVariable<GamePhase> CurrentPhase = new(GamePhase.Question, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
-    public NetworkVariable<ulong> RoundOwnerClientId = new(0, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
+    public NetworkVariable<GamePhase> CurrentPhase = new(GamePhase.Question, NetworkVariableReadPermission.Everyone,
+        NetworkVariableWritePermission.Server);
 
-    public NetworkVariable<FixedString128Bytes> CurrentQuestion = new("", NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
-    public NetworkVariable<FixedString64Bytes> AnswerA = new("", NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
-    public NetworkVariable<FixedString64Bytes> AnswerB = new("", NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
-    public NetworkVariable<FixedString64Bytes> AnswerC = new("", NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
-    public NetworkVariable<FixedString64Bytes> AnswerD = new("", NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
-    
-    public NetworkVariable<int> RevealedCorrectIndex = new(-1, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
-    public NetworkVariable<int> RevealedChosenIndex = new(-1, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
+    public NetworkVariable<ulong> RoundOwnerClientId =
+        new(0, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
 
-    public NetworkVariable<double> QuestionEndTime = new(0, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
+    public NetworkVariable<ulong> WinnerClientId = new(ulong.MaxValue, NetworkVariableReadPermission.Everyone,
+        NetworkVariableWritePermission.Server);
+
+    public NetworkVariable<FixedString128Bytes> CurrentQuestion =
+        new("", NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
+
+    public NetworkVariable<FixedString64Bytes> AnswerA = new("", NetworkVariableReadPermission.Everyone,
+        NetworkVariableWritePermission.Server);
+
+    public NetworkVariable<FixedString64Bytes> AnswerB = new("", NetworkVariableReadPermission.Everyone,
+        NetworkVariableWritePermission.Server);
+
+    public NetworkVariable<FixedString64Bytes> AnswerC = new("", NetworkVariableReadPermission.Everyone,
+        NetworkVariableWritePermission.Server);
+
+    public NetworkVariable<FixedString64Bytes> AnswerD = new("", NetworkVariableReadPermission.Everyone,
+        NetworkVariableWritePermission.Server);
+
+    public NetworkVariable<int> RevealedCorrectIndex =
+        new(-1, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
+
+    public NetworkVariable<int> RevealedChosenIndex =
+        new(-1, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
+
+    public NetworkVariable<double> QuestionEndTime =
+        new(0, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
+
     public float QuestionDuration => questionDuration;
 
     private readonly (string question, string[] answers, int correctIndex)[] placeholderQuestions =
@@ -58,9 +92,12 @@ public class RoundManager : NetworkBehaviour
         ("Which planet is closest to the sun?", new[] { "Venus", "Mercury", "Earth", "Mars" }, 1),
     };
 
+    // Server-only state
     private int correctAnswerIndex;
     private int nextOwnerIndex = 0;
     private int currentRoundToken = 0;
+    private bool hasShotThisAction = false;
+    private bool gameOver = false;
 
     private void Awake() => Instance = this;
 
@@ -68,7 +105,7 @@ public class RoundManager : NetworkBehaviour
     {
         if (IsServer)
         {
-            GenerateNewAmmo();
+            if (LobbyManager.Instance != null) LobbyManager.Instance.SetGameInProgress(true);
             StartCoroutine(WaitForPlayersThenStartRound());
             NetworkManager.Singleton.OnClientDisconnectCallback += HandleClientDisconnected;
         }
@@ -81,27 +118,114 @@ public class RoundManager : NetworkBehaviour
 
     public override void OnNetworkDespawn()
     {
-        if (IsServer && NetworkManager.Singleton != null)
+        if (!IsServer) return;
+
+        if (LobbyManager.Instance != null) LobbyManager.Instance.SetGameInProgress(false);
+        if (NetworkManager.Singleton != null)
             NetworkManager.Singleton.OnClientDisconnectCallback -= HandleClientDisconnected;
+    }
+
+    private PlayerPoints GetPoints(ulong clientId)
+    {
+        if (!NetworkManager.Singleton.ConnectedClients.TryGetValue(clientId, out var client)) return null;
+        return client.PlayerObject != null ? client.PlayerObject.GetComponent<PlayerPoints>() : null;
+    }
+
+    private List<ulong> GetPlayerClientIds(ulong exclude = ulong.MaxValue)
+    {
+        var list = new List<ulong>();
+        foreach (ulong id in NetworkManager.Singleton.ConnectedClientsIds)
+        {
+            if (id != exclude && GetPoints(id) != null) list.Add(id);
+        }
+
+        return list;
+    }
+
+    private bool AllPlayersSpawned()
+    {
+        var clients = NetworkManager.Singleton.ConnectedClientsList;
+        if (clients.Count == 0) return false;
+        foreach (var c in clients)
+        {
+            if (c.PlayerObject == null) return false;
+        }
+
+        return true;
+    }
+
+    private void ChangePoints(ulong clientId, int amount)
+    {
+        var points = GetPoints(clientId);
+        if (points == null) return;
+
+        points.AddPoints(amount);
+        if (points.Points.Value >= winningPoints) EndGame(clientId);
+    }
+
+
+    private IEnumerator WaitForPlayersThenStartRound()
+    {
+        while (!AllPlayersSpawned()) yield return null;
+
+        foreach (ulong id in GetPlayerClientIds())
+            GetPoints(id).SetPoints(startingPoints);
+
+        StartRound();
+        IsReady = true;
+        OnReady?.Invoke();
+    }
+
+    private void EndGame(ulong winnerId)
+    {
+        if (gameOver) return;
+        gameOver = true;
+
+        WinnerClientId.Value = winnerId;
+        CurrentPhase.Value = GamePhase.GameOver;
+        Debug.Log($"Game over. Winner: client {winnerId}");
+
+        StartCoroutine(ReturnToLobbyAfterDelay());
+    }
+
+    private IEnumerator ReturnToLobbyAfterDelay()
+    {
+        yield return new WaitForSeconds(gameOverDuration);
+
+        foreach (var state in FindObjectsByType<PlayerLobbyState>(FindObjectsSortMode.None))
+            state.ResetReadyClientRpc();
+
+        NetworkManager.Singleton.SceneManager.LoadScene("MainMenu", UnityEngine.SceneManagement.LoadSceneMode.Single);
     }
 
     private void HandleClientDisconnected(ulong clientId)
     {
-        if (clientId == RoundOwnerClientId.Value)
+        if (gameOver) return;
+        if (NetworkManager.Singleton == null || NetworkManager.Singleton.ShutdownInProgress) return;
+
+        var remaining = GetPlayerClientIds(clientId);
+
+        if (remaining.Count <= 1)
         {
-            SkipToNextRound();
+            EndGame(remaining.Count == 1 ? remaining[0] : ulong.MaxValue);
+            return;
         }
+
+        if (clientId == RoundOwnerClientId.Value && CurrentPhase.Value != GamePhase.Waiting)
+            SkipToNextRound(currentRoundToken);
     }
 
     private void StartRound()
     {
-        var aliveIds = GetAliveClientIds();
-        if (aliveIds.Count == 0) return;
+        if (gameOver) return;
+
+        var players = GetPlayerClientIds();
+        if (players.Count == 0) return;
 
         currentRoundToken++;
-        int myToken = currentRoundToken;
+        hasShotThisAction = false;
 
-        ulong owner = aliveIds[nextOwnerIndex % aliveIds.Count];
+        ulong owner = players[nextOwnerIndex % players.Count];
         nextOwnerIndex++;
         RoundOwnerClientId.Value = owner;
 
@@ -119,17 +243,58 @@ public class RoundManager : NetworkBehaviour
         QuestionEndTime.Value = NetworkManager.Singleton.ServerTime.Time + questionDuration;
         CurrentPhase.Value = GamePhase.Question;
 
-        StartCoroutine(QuestionTimeoutRoutine(myToken));
+        StartCoroutine(QuestionTimeoutRoutine(currentRoundToken));
     }
 
-    private IEnumerator QuestionTimeoutRoutine(int myToken)
+    private void AdvanceRound(int token)
+    {
+        if (gameOver || token != currentRoundToken) return;
+        RoundNumber.Value++;
+        StartRound();
+    }
+
+    private void SkipToNextRound(int token)
+    {
+        if (gameOver) return;
+        CurrentPhase.Value = GamePhase.Waiting;
+        StartCoroutine(WaitingThenNextRound(token));
+    }
+
+    private IEnumerator WaitingThenNextRound(int token)
+    {
+        yield return new WaitForSeconds(1f);
+        AdvanceRound(token);
+    }
+
+    private IEnumerator QuestionTimeoutRoutine(int token)
     {
         yield return new WaitForSeconds(questionDuration);
-        if (myToken != currentRoundToken) yield break;
-        if (CurrentPhase.Value != GamePhase.Question) yield break;
+        if (token != currentRoundToken || CurrentPhase.Value != GamePhase.Question) yield break;
 
         Debug.Log("Question timed out, skipping round.");
-        SkipToNextRound();
+        SkipToNextRound(token);
+    }
+
+    private IEnumerator RevealThenSkipRound(int token)
+    {
+        yield return new WaitForSeconds(revealDuration);
+        if (token != currentRoundToken) yield break;
+        SkipToNextRound(token);
+    }
+
+    private IEnumerator ActionPhaseTimeout(int token)
+    {
+        yield return new WaitForSeconds(actionDuration);
+        if (token != currentRoundToken || CurrentPhase.Value != GamePhase.Action) yield break;
+
+        Debug.Log("Action phase timed out with no shot, skipping round.");
+        AdvanceRound(token);
+    }
+
+    private IEnumerator EndActionPhaseAfterShot(int token)
+    {
+        yield return new WaitForSeconds(shotResultDuration);
+        AdvanceRound(token);
     }
 
     [ServerRpc(RequireOwnership = false)]
@@ -141,102 +306,33 @@ public class RoundManager : NetworkBehaviour
 
         if (answerIndex == correctAnswerIndex)
         {
-            CurrentPhase.Value = GamePhase.Action;
-            hasShotThisAction = false; // reset for the new action phase
+            ChangePoints(senderId, pointsForCorrectAnswer);
+            if (gameOver) return;
 
-            currentActionToken++;
-            int myActionToken = currentActionToken;
-            StartCoroutine(ActionPhaseTimeout(myActionToken));
+            CurrentPhase.Value = GamePhase.Action;
+            StartCoroutine(ActionPhaseTimeout(currentRoundToken));
         }
         else
         {
             RevealedCorrectIndex.Value = correctAnswerIndex;
             RevealedChosenIndex.Value = answerIndex;
             CurrentPhase.Value = GamePhase.Reveal;
-            StartCoroutine(RevealThenSkipRound());
+            StartCoroutine(RevealThenSkipRound(currentRoundToken));
         }
     }
-    
-    private IEnumerator ActionPhaseTimeout(int myToken)
-    {
-        yield return new WaitForSeconds(actionDuration);
-        if (myToken != currentActionToken) yield break; 
-        if (CurrentPhase.Value != GamePhase.Action) yield break;
 
-        Debug.Log("Action phase timed out with no shot, skipping round.");
-        AdvanceToNextRoundImmediately();
-    }
-    private IEnumerator RevealThenSkipRound()
+
+    private AmmoType RollAmmo()
     {
-        yield return new WaitForSeconds(revealDuration);
-        SkipToNextRound();
+        float total = blankChance + healChance + liveChance;
+        if (total <= 0f) return AmmoType.Blank;
+
+        float roll = Random.Range(0f, total);
+        if (roll < blankChance) return AmmoType.Blank;
+        if (roll < blankChance + healChance) return AmmoType.Heal;
+        return AmmoType.Live;
     }
 
-    /*private IEnumerator ActionPhaseThenNextRound()
-    {
-        yield return new WaitForSeconds(actionDuration);
-        AdvanceToNextRoundImmediately();
-    }*/
-
-    private void SkipToNextRound()
-    {
-        CurrentPhase.Value = GamePhase.Waiting;
-        StartCoroutine(WaitingThenNextRound());
-    }
-
-    private IEnumerator WaitingThenNextRound()
-    {
-        yield return new WaitForSeconds(1f);
-        AdvanceToNextRoundImmediately();
-    }
-
-    private void AdvanceToNextRoundImmediately()
-    {
-        RoundNumber.Value++;
-        StartRound();
-    }
-    
-    private void GenerateNewAmmo()
-    {
-        loadCount++;
-        ammoQueue.Clear();
-
-        int liveCount = Mathf.Min(5, loadCount);       // 1 on first load, +1 each reload, capped at 5
-        int healCount = loadCount >= 3 ? 1 : 0;         // starts on the load after the 3ft reload
-        int total = (loadCount >= 3) ? 7 : 6;
-        int blankCount = total - liveCount - healCount;
-
-        for (int i = 0; i < liveCount; i++) ammoQueue.Add(AmmoType.Live);
-        for (int i = 0; i < healCount; i++) ammoQueue.Add(AmmoType.Heal);
-        for (int i = 0; i < blankCount; i++) ammoQueue.Add(AmmoType.Blank);
-
-        // Fisher-Yates shuffle
-        for (int i = ammoQueue.Count - 1; i > 0; i--)
-        {
-            int j = Random.Range(0, i + 1);
-            (ammoQueue[i], ammoQueue[j]) = (ammoQueue[j], ammoQueue[i]);
-        }
-
-        Debug.Log($"Ammo load #{loadCount}: {liveCount} live, {blankCount} blank, {healCount} heal.");
-    }
-    
-    private AmmoType PopNextAmmo()
-    {
-        if (ammoQueue.Count == 0) GenerateNewAmmo();
-
-        AmmoType result = ammoQueue[0];
-        ammoQueue.RemoveAt(0);
-
-        // If everything left is blank, there's no point continuing this batch - reload for next time.
-        if (ammoQueue.Count > 0 && ammoQueue.All(a => a == AmmoType.Blank))
-        {
-            Debug.Log("Remaining ammo is all blank, reloading.");
-            GenerateNewAmmo();
-        }
-
-        return result;
-    }
-    
     [ServerRpc(RequireOwnership = false)]
     public void TryAttackServerRpc(ulong targetClientId, ServerRpcParams rpcParams = default)
     {
@@ -244,102 +340,32 @@ public class RoundManager : NetworkBehaviour
 
         if (senderId != RoundOwnerClientId.Value) return;
         if (CurrentPhase.Value != GamePhase.Action) return;
-        if (hasShotThisAction) return; // blocks any further shots this action phase
+        if (hasShotThisAction) return;
+        if (GetPoints(targetClientId) == null) return;
 
-        if (!NetworkManager.Singleton.ConnectedClients.TryGetValue(targetClientId, out var targetClient)) return;
-        var targetObj = targetClient.PlayerObject;
-        if (targetObj == null) return;
+        hasShotThisAction = true;
 
-        var targetHealth = targetObj.GetComponent<PlayerHealth>();
-        if (targetHealth == null || targetHealth.IsDead.Value) return;
-
-        hasShotThisAction = true; // lock immediately, before any further processing
-
-        bool isSelf = senderId == targetClientId;
-        AmmoType ammo = PopNextAmmo();
-
+        AmmoType ammo = RollAmmo();
         switch (ammo)
         {
             case AmmoType.Live:
-                targetHealth.TakeDamage(1);
+                ChangePoints(targetClientId, -pointsLostOnHit);
                 break;
             case AmmoType.Heal:
-                targetHealth.Heal(1);
+                ChangePoints(targetClientId, pointsGainedOnHeal);
                 break;
         }
 
         NotifyShotClientRpc(senderId, targetClientId, ammo);
 
-        currentActionToken++;
-        StartCoroutine(EndActionPhaseAfterShot());
+        if (gameOver) return;
+        StartCoroutine(EndActionPhaseAfterShot(currentRoundToken));
     }
 
-    private IEnumerator EndActionPhaseAfterShot()
-    {
-        yield return new WaitForSeconds(1.5f);
-
-        bool gameEnded = CheckForGameEnd();
-        if (!gameEnded)
-        {
-            AdvanceToNextRoundImmediately();
-        }
-    }
-    
     [ClientRpc]
     private void NotifyShotClientRpc(ulong shooterId, ulong targetId, AmmoType ammo)
     {
         Debug.Log($"[Shot feedback] Shooter {shooterId} -> Target {targetId}, {ammo}");
         // Hook VFX/SFX here later
-    }
-    
-    
-    private bool IsClientAlive(ulong clientId)
-    {
-        if (!NetworkManager.Singleton.ConnectedClients.TryGetValue(clientId, out var client)) return false;
-        var health = client.PlayerObject != null ? client.PlayerObject.GetComponent<PlayerHealth>() : null;
-        return health != null && !health.IsDead.Value;
-    }
-    
-    private bool CheckForGameEnd()
-    {
-        var aliveIds = GetAliveClientIds();
-
-        if (aliveIds.Count <= 1)
-        {
-            Debug.Log("Game over! Resetting lobby state and returning everyone to the lobby.");
-
-            foreach (var state in FindObjectsByType<PlayerLobbyState>(FindObjectsSortMode.None))
-            {
-                state.ResetReadyClientRpc();
-            }
-
-            NetworkManager.Singleton.SceneManager.LoadScene("MainMenu", UnityEngine.SceneManagement.LoadSceneMode.Single);
-            return true;
-        }
-
-        return false;
-    }
-
-    private void EndGameAndReturnToLobby()
-    {
-        Debug.Log("Game over! Returning all players to the lobby.");
-        NetworkManager.Singleton.SceneManager.LoadScene("MainMenu", UnityEngine.SceneManagement.LoadSceneMode.Single);
-    }
-    
-    private List<ulong> GetAliveClientIds()
-    {
-        return NetworkManager.Singleton.ConnectedClientsIds.Where(IsClientAlive).ToList();
-    }
-    
-    private IEnumerator WaitForPlayersThenStartRound()
-    {
-        while (GetAliveClientIds().Count == 0)
-        {
-            yield return null;
-        }
-
-        StartRound();
-        IsReady = true;
-        OnReady?.Invoke();
     }
 }
