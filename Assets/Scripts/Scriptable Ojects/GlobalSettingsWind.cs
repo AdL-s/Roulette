@@ -30,7 +30,14 @@ public class GlobalSettingsWind : ScriptableObject
    // public float smoothness;
     
     public float windStrength;
-    
+
+    public Transform wind;
+    [Range(0f, 45f)] public float leanAmount = 15f;
+
+    private void OnEnable()
+    {
+        FindParticleSystem();
+    }
     
     [Button]
     public void SetGlobalWind()
@@ -39,6 +46,13 @@ public class GlobalSettingsWind : ScriptableObject
         float rad = windDirection * Mathf.Deg2Rad;
         Vector2 dir = new Vector2(Mathf.Cos(rad), Mathf.Sin(rad));
         
+        
+        float tiltY = dir.x * leanAmount;
+        float tiltZ = dir.y * leanAmount;
+
+        wind.localRotation = Quaternion.Euler(90f, tiltY, tiltZ);
+        
+        
         Shader.SetGlobalFloat(globalWindStrength, windStrength);
         Shader.SetGlobalTexture(globalWindTexture, windTexture);
         Shader.SetGlobalTexture(globalWindTexture2, windTexture2);
@@ -46,6 +60,16 @@ public class GlobalSettingsWind : ScriptableObject
         Shader.SetGlobalFloat(globalWindScale, windScale);
         Shader.SetGlobalVector(globalWindDirection, dir);
         
+        
+    }
+    
+    
+    [Button]
+    private void FindParticleSystem()
+    {
+        var found = GameObject.Find("WindParticles");
+        if (found == null) return;
+        wind = found.transform;
         
     }
     
