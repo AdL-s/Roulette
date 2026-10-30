@@ -14,12 +14,14 @@ public class MainMenu : MonoBehaviour
 {
     public static MainMenu Instance { get; private set; }
 
-    [Header("Lobby player list")]
-    [SerializeField] private Transform playerListContainer;
+    [Header("Lobby player list")] [SerializeField]
+    private Transform playerListContainer;
+
     [SerializeField] private GameObject playerRowPrefab;
 
-    [Header("Lobby buttons")]
-    [SerializeField] private Button inviteButton;
+    [Header("Lobby buttons")] [SerializeField]
+    private Button inviteButton;
+
     [SerializeField] private Button readyButton;
     [SerializeField] private TMP_Text readyButtonText;
     [SerializeField] private Color readyColor = Color.green;
@@ -28,39 +30,39 @@ public class MainMenu : MonoBehaviour
     [SerializeField] private Button startButton;
     [SerializeField] private TMP_Text lobbyCodeText;
 
-    [Header("Panels")]
-    [SerializeField] private GameObject mainMenuCanvas;
+    [Header("Panels")] [SerializeField] private GameObject mainMenuCanvas;
     [SerializeField] private GameObject mainMenuPanel;
     [SerializeField] private GameObject lobbyPanel;
 
-    [Header("Join panel")]
-    [SerializeField] private GameObject joinPanel;
+    [Header("Join panel")] [SerializeField]
+    private GameObject joinPanel;
+
     [SerializeField] private Button openJoinPanelButton;
-    
+
     [SerializeField] private TMP_InputField searchInput;
     [SerializeField] private Transform serverListContainer;
     [SerializeField] private RectTransform contentRectTransform;
     [SerializeField] private GameObject serverRowPrefab;
-    
+
     [SerializeField] private Button refreshButton;
     [SerializeField] private Button closeJoinPanelButton;
-    
+
     [SerializeField] private TMP_InputField codeInput;
     [SerializeField] private Button joinByCodeButton;
     [SerializeField] private TMP_Text joinErrorText;
-    
-    [Header("Toggle")]
-    [SerializeField] private Toggle privateToggle;
-    
-    [Header("Lobby id buttons / toggles")]
-    [SerializeField] private Button copyCodeButton;
+
+    [Header("Toggle")] [SerializeField] private Toggle privateToggle;
+
+    [Header("Lobby id buttons / toggles")] [SerializeField]
+    private Button copyCodeButton;
+
     [SerializeField] private Toggle showCodeToggle;
 
     private string originalSceneName;
     private Lobby currentLobby;
     private readonly List<GameObject> spawnedRows = new List<GameObject>();
     private readonly List<GameObject> spawnedServerRows = new List<GameObject>();
-    
+
     private string currentLobbyCode = "";
     private bool isCodeVisible = false;
 
@@ -77,6 +79,7 @@ public class MainMenu : MonoBehaviour
             Destroy(gameObject);
             return;
         }
+
         Instance = this;
 
         inviteButton.onClick.AddListener(OnInviteClicked);
@@ -93,14 +96,14 @@ public class MainMenu : MonoBehaviour
         codeInput.characterLimit = LobbyCodeUtility.CodeLength;
         joinPanel.SetActive(false);
         joinErrorText.gameObject.SetActive(false);
-        
+
         privateToggle.onValueChanged.AddListener(OnPrivateToggleChanged);
         privateToggle.gameObject.SetActive(false);
-        
+
         copyCodeButton.onClick.AddListener(OnCopyCodeClicked);
         showCodeToggle.onValueChanged.AddListener(OnShowCodeToggleChanged);
         showCodeToggle.SetIsOnWithoutNotify(false);
-        
+
         SteamMatchmaking.OnLobbyMemberJoined += (lobby, friend) => RefreshPlayerList();
         SteamMatchmaking.OnLobbyMemberLeave += (lobby, friend) => RefreshPlayerList();
         SteamMatchmaking.OnLobbyMemberDisconnected += (lobby, friend) => RefreshPlayerList();
@@ -110,7 +113,7 @@ public class MainMenu : MonoBehaviour
 
     public void OnHostButton() => LobbyManager.Instance.HostLobby("Lobby", false, false);
     // Swap the line above for hostOptionsUI.Open() once you wire up the Host options popup
-    
+
 
     private void OnOpenJoinPanel()
     {
@@ -159,7 +162,7 @@ public class MainMenu : MonoBehaviour
         joinErrorText.text = message;
         joinErrorText.gameObject.SetActive(true);
     }
-    
+
 
     public void SetLobby(Lobby lobby)
     {
@@ -240,9 +243,10 @@ public class MainMenu : MonoBehaviour
             if (state.SteamId.Value == steamId.Value)
                 return state.IsReady.Value;
         }
+
         return false;
     }
-    
+
 
     private void OnInviteClicked()
     {
@@ -251,6 +255,7 @@ public class MainMenu : MonoBehaviour
             Debug.LogWarning("No active lobby to invite to.");
             return;
         }
+
         SteamFriends.OpenGameInviteOverlay(currentLobby.Id);
     }
 
@@ -265,9 +270,6 @@ public class MainMenu : MonoBehaviour
             UpdateReadyButtonText(localState.IsReady.Value);
         }
 
-        // Route through LobbyManager instead of duplicating the leave/shutdown logic here - it
-        // owns the lobby/session state (and knows to reinitialize Steam after the transport
-        // shuts it down), so there's a single place responsible for cleanup.
         LobbyManager.Instance.LeaveLobby();
     }
 
@@ -287,6 +289,7 @@ public class MainMenu : MonoBehaviour
         {
             if (obj.IsOwner) return obj;
         }
+
         return null;
     }
 
@@ -334,12 +337,12 @@ public class MainMenu : MonoBehaviour
         joinPanel.SetActive(false);
         mainMenuPanel.SetActive(true);
     }
-    
+
     private void OnPrivateToggleChanged(bool isPrivate)
     {
         LobbyManager.Instance.SetLobbyPrivate(isPrivate);
     }
-    
+
     private void OnShowCodeToggleChanged(bool show)
     {
         isCodeVisible = show;
@@ -363,6 +366,4 @@ public class MainMenu : MonoBehaviour
         GUIUtility.systemCopyBuffer = currentLobbyCode;
         Debug.Log($"Copied lobby code: {currentLobbyCode}");
     }
-    
-    
 }

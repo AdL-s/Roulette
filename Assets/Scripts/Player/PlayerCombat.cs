@@ -11,22 +11,20 @@ public class PlayerCombat : NetworkBehaviour
     private void Update()
     {
         if (!IsOwner) return;
-        if (RoundManager.Instance == null) return;
+
+        var round = RoundManager.Instance;
+        var nm = NetworkManager.Singleton;
+        if (round == null || nm == null) return;
 
         bool isMyActionTurn =
-            RoundManager.Instance.CurrentPhase.Value == GamePhase.Action &&
-            NetworkManager.Singleton.LocalClientId == RoundManager.Instance.RoundOwnerClientId.Value;
+            round.CurrentPhase.Value == GamePhase.Action &&
+            nm.LocalClientId == round.RoundOwnerClientId.Value;
 
         if (!isMyActionTurn) return;
+        if (ItemSystem.BlockShooting) return;
 
         if (Mouse.current.leftButton.wasPressedThisFrame)
-        {
             TryShootAtLookedTarget();
-        }
-        else if (Mouse.current.rightButton.wasPressedThisFrame)
-        {
-            RoundManager.Instance.TryAttackServerRpc(NetworkManager.Singleton.LocalClientId); // self-attack
-        }
     }
 
     private void TryShootAtLookedTarget()
@@ -43,16 +41,18 @@ public class PlayerCombat : NetworkBehaviour
             if (highlight.block.GetFloat("_EmissionIntensity") >= 5.0)
             {
                 return;
-                
-            }else if (highlight.block.GetFloat("_EmissionIntensity") < 5.0)
-            {
-                highlight.block.SetFloat("_EmissionIntensity", highlight.block.GetFloat("_EmissionIntensity") + 1 * Time.deltaTime  ) ;
             }
-            
-            
+            else if (highlight.block.GetFloat("_EmissionIntensity") < 5.0)
+            {
+                highlight.block.SetFloat("_EmissionIntensity",
+                    highlight.block.GetFloat("_EmissionIntensity") + 1 * Time.deltaTime);
+            }
+
+
             var targetNetObj = hit.collider.GetComponentInParent<NetworkObject>();
             if (targetNetObj == null) return;
-            if (targetNetObj.OwnerClientId == NetworkManager.Singleton.LocalClientId) return; // LMB can't hit self, use RMB for that
+            if (targetNetObj.OwnerClientId == NetworkManager.Singleton.LocalClientId)
+                return; // LMB can't hit self, use RMB for that
 
             RoundManager.Instance.TryAttackServerRpc(targetNetObj.OwnerClientId);
         }
