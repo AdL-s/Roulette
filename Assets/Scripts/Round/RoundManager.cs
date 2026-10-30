@@ -25,6 +25,11 @@ public class RoundManager : NetworkBehaviour
     }
 
     [Header("Timing")] [SerializeField] private float questionDuration = 15f;
+
+    [Tooltip("Question time multiplier while the player has the ShortQuestionTime state")]
+    [SerializeField, Range(0.1f, 1f)]
+    private float shortQuestionTimeMultiplier = 0.5f;
+
     [SerializeField] private float revealDuration = 3f;
     [SerializeField] private float actionDuration = 60f;
     [SerializeField] private float shotResultDuration = 1.5f;
@@ -83,7 +88,11 @@ public class RoundManager : NetworkBehaviour
     public NetworkVariable<double> QuestionEndTime =
         new(0, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
 
-    public float QuestionDuration => questionDuration;
+    // Duration of the CURRENT question (can be shortened by a player state)
+    public NetworkVariable<float> CurrentQuestionDuration =
+        new(15f, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
+
+    public float QuestionDuration => CurrentQuestionDuration.Value;
 
     private readonly (string question, string[] answers, int correctIndex)[] placeholderQuestions =
     {
@@ -120,6 +129,7 @@ public class RoundManager : NetworkBehaviour
     {
         if (!IsServer) return;
 
+        // Game scene is going away (game over, host left): lobby is joinable again.
         if (LobbyManager.Instance != null) LobbyManager.Instance.SetGameInProgress(false);
         if (NetworkManager.Singleton != null)
             NetworkManager.Singleton.OnClientDisconnectCallback -= HandleClientDisconnected;
@@ -154,8 +164,11 @@ public class RoundManager : NetworkBehaviour
         return true;
     }
 
-    private void ChangePoints(ulong clientId, int amount)
+
+    public void ChangePoints(ulong clientId, int amount)
     {
+        if (!IsServer) return;
+
         var points = GetPoints(clientId);
         if (points == null) return;
 
@@ -163,6 +176,17 @@ public class RoundManager : NetworkBehaviour
         if (points.Points.Value >= winningPoints) EndGame(clientId);
     }
 
+    public bool IsPlayer(ulong clientId) => GetPoints(clientId) != null;
+
+    // Items can be used by the round owner during the action phase, before the shot.
+    public bool CanUseItems(ulong clientId)
+    {
+        return IsServer
+               && !gameOver
+               && CurrentPhase.Value == GamePhase.Action
+               && clientId == RoundOwnerClientId.Value
+               && !hasShotThisAction;
+    }
 
     private IEnumerator WaitForPlayersThenStartRound()
     {
@@ -203,6 +227,7 @@ public class RoundManager : NetworkBehaviour
         if (gameOver) return;
         if (NetworkManager.Singleton == null || NetworkManager.Singleton.ShutdownInProgress) return;
 
+        // Players still in the game, not counting the one who left
         var remaining = GetPlayerClientIds(clientId);
 
         if (remaining.Count <= 1)
@@ -211,6 +236,7 @@ public class RoundManager : NetworkBehaviour
             return;
         }
 
+        // Round owner left: skip to the next round (not if we are already between rounds)
         if (clientId == RoundOwnerClientId.Value && CurrentPhase.Value != GamePhase.Waiting)
             SkipToNextRound(currentRoundToken);
     }
@@ -225,9 +251,14 @@ public class RoundManager : NetworkBehaviour
         currentRoundToken++;
         hasShotThisAction = false;
 
-        ulong owner = players[nextOwnerIndex % players.Count];
-        nextOwnerIndex++;
+        ulong owner = PickNextOwner(players);
         RoundOwnerClientId.Value = owner;
+
+        float duration = questionDuration;
+        var ownerStates = PlayerStates.Get(owner);
+        if (ownerStates != null && ownerStates.Has(PlayerStateFlags.ShortQuestionTime))
+            duration *= shortQuestionTimeMultiplier;
+        CurrentQuestionDuration.Value = duration;
 
         var q = placeholderQuestions[Random.Range(0, placeholderQuestions.Length)];
         CurrentQuestion.Value = q.question;
@@ -240,15 +271,45 @@ public class RoundManager : NetworkBehaviour
         RevealedCorrectIndex.Value = -1;
         RevealedChosenIndex.Value = -1;
 
-        QuestionEndTime.Value = NetworkManager.Singleton.ServerTime.Time + questionDuration;
+        QuestionEndTime.Value = NetworkManager.Singleton.ServerTime.Time + duration;
         CurrentPhase.Value = GamePhase.Question;
 
-        StartCoroutine(QuestionTimeoutRoutine(currentRoundToken));
+        StartCoroutine(QuestionTimeoutRoutine(currentRoundToken, duration));
+    }
+
+
+    private ulong PickNextOwner(List<ulong> players)
+    {
+        ulong owner = players[nextOwnerIndex++ % players.Count];
+
+        for (int i = 0; i < players.Count; i++)
+        {
+            var states = PlayerStates.Get(owner);
+            if (states == null || !states.Has(PlayerStateFlags.SkipTurn)) break;
+
+            states.Clear();
+            NotifyTurnSkippedClientRpc(owner);
+            owner = players[nextOwnerIndex++ % players.Count];
+        }
+
+        return owner;
+    }
+
+    [ClientRpc]
+    private void NotifyTurnSkippedClientRpc(ulong skippedClientId)
+    {
+        Debug.Log($"[Turn skipped] Client {skippedClientId}");
+        // Hook UI/SFX here later
     }
 
     private void AdvanceRound(int token)
     {
         if (gameOver || token != currentRoundToken) return;
+
+        // The owner's turn is over: their states go back to default.
+        var endedOwnerStates = PlayerStates.Get(RoundOwnerClientId.Value);
+        if (endedOwnerStates != null) endedOwnerStates.Clear();
+
         RoundNumber.Value++;
         StartRound();
     }
@@ -266,9 +327,9 @@ public class RoundManager : NetworkBehaviour
         AdvanceRound(token);
     }
 
-    private IEnumerator QuestionTimeoutRoutine(int token)
+    private IEnumerator QuestionTimeoutRoutine(int token, float duration)
     {
-        yield return new WaitForSeconds(questionDuration);
+        yield return new WaitForSeconds(duration);
         if (token != currentRoundToken || CurrentPhase.Value != GamePhase.Question) yield break;
 
         Debug.Log("Question timed out, skipping round.");
@@ -307,7 +368,10 @@ public class RoundManager : NetworkBehaviour
         if (answerIndex == correctAnswerIndex)
         {
             ChangePoints(senderId, pointsForCorrectAnswer);
-            if (gameOver) return;
+            if (gameOver) return; // reached the winning points with this answer
+
+            if (ItemSystem.Instance != null) ItemSystem.Instance.GrantRandomItem(senderId);
+            else Debug.LogWarning("[RoundManager] No ItemSystem in the game scene, no item granted.");
 
             CurrentPhase.Value = GamePhase.Action;
             StartCoroutine(ActionPhaseTimeout(currentRoundToken));
@@ -320,7 +384,6 @@ public class RoundManager : NetworkBehaviour
             StartCoroutine(RevealThenSkipRound(currentRoundToken));
         }
     }
-
 
     private AmmoType RollAmmo()
     {
@@ -341,16 +404,22 @@ public class RoundManager : NetworkBehaviour
         if (senderId != RoundOwnerClientId.Value) return;
         if (CurrentPhase.Value != GamePhase.Action) return;
         if (hasShotThisAction) return;
+        if (targetClientId == senderId) return; // shooting yourself is not allowed
         if (GetPoints(targetClientId) == null) return;
 
-        hasShotThisAction = true;
+        hasShotThisAction = true; // lock before any further processing
 
         AmmoType ammo = RollAmmo();
         switch (ammo)
         {
             case AmmoType.Live:
-                ChangePoints(targetClientId, -pointsLostOnHit);
+            {
+                int damage = pointsLostOnHit;
+                var shooterStates = PlayerStates.Get(senderId);
+                if (shooterStates != null && shooterStates.Has(PlayerStateFlags.DoubleDamage)) damage *= 2;
+                ChangePoints(targetClientId, -damage);
                 break;
+            }
             case AmmoType.Heal:
                 ChangePoints(targetClientId, pointsGainedOnHeal);
                 break;
@@ -358,7 +427,7 @@ public class RoundManager : NetworkBehaviour
 
         NotifyShotClientRpc(senderId, targetClientId, ammo);
 
-        if (gameOver) return;
+        if (gameOver) return; // heal pushed the target to the winning points
         StartCoroutine(EndActionPhaseAfterShot(currentRoundToken));
     }
 
