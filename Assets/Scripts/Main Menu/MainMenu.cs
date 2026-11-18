@@ -62,6 +62,7 @@ public class MainMenu : MonoBehaviour
     private Lobby currentLobby;
     private readonly List<GameObject> spawnedRows = new List<GameObject>();
     private readonly List<GameObject> spawnedServerRows = new List<GameObject>();
+    private int serverListRequestId;
 
     private string currentLobbyCode = "";
     private bool isCodeVisible = false;
@@ -104,10 +105,23 @@ public class MainMenu : MonoBehaviour
         showCodeToggle.onValueChanged.AddListener(OnShowCodeToggleChanged);
         showCodeToggle.SetIsOnWithoutNotify(false);
 
-        SteamMatchmaking.OnLobbyMemberJoined += (lobby, friend) => RefreshPlayerList();
-        SteamMatchmaking.OnLobbyMemberLeave += (lobby, friend) => RefreshPlayerList();
-        SteamMatchmaking.OnLobbyMemberDisconnected += (lobby, friend) => RefreshPlayerList();
+        SteamMatchmaking.OnLobbyMemberJoined += OnLobbyMembersChanged;
+        SteamMatchmaking.OnLobbyMemberLeave += OnLobbyMembersChanged;
+        SteamMatchmaking.OnLobbyMemberDisconnected += OnLobbyMembersChanged;
     }
+
+    private void OnDestroy()
+    {
+        if (Instance != this) return;
+
+        SteamMatchmaking.OnLobbyMemberJoined -= OnLobbyMembersChanged;
+        SteamMatchmaking.OnLobbyMemberLeave -= OnLobbyMembersChanged;
+        SteamMatchmaking.OnLobbyMemberDisconnected -= OnLobbyMembersChanged;
+
+        Instance = null;
+    }
+
+    private void OnLobbyMembersChanged(Lobby lobby, Friend friend) => RefreshPlayerList();
 
     public void Quit() => Application.Quit();
 
@@ -126,10 +140,15 @@ public class MainMenu : MonoBehaviour
 
     private async Task RefreshServerList()
     {
+        int requestId = ++serverListRequestId;
+
+        var lobbies = await LobbyManager.Instance.SearchLobbies(searchInput.text);
+
+        if (this == null || requestId != serverListRequestId) return;
+
         foreach (var row in spawnedServerRows) Destroy(row);
         spawnedServerRows.Clear();
 
-        var lobbies = await LobbyManager.Instance.SearchLobbies(searchInput.text);
         foreach (var lobby in lobbies)
         {
             var rowObj = Instantiate(serverRowPrefab, serverListContainer);
@@ -200,6 +219,8 @@ public class MainMenu : MonoBehaviour
         foreach (var row in spawnedRows) Destroy(row);
         spawnedRows.Clear();
 
+        if (currentLobby.Id == 0) return; // left the lobby, a late Steam event must not rebuild the list
+
         foreach (Friend member in currentLobby.Members)
         {
             bool isReady = GetReadyStateForSteamId(member.Id);
@@ -227,6 +248,8 @@ public class MainMenu : MonoBehaviour
     private void OnStartClicked()
     {
         if (currentLobby.Owner.Id != SteamClient.SteamId) return;
+
+        LobbyManager.Instance.SetGameInProgress(true); // blocks joins from now on
         NetworkManager.Singleton.SceneManager.LoadScene("GameScene", UnityEngine.SceneManagement.LoadSceneMode.Single);
     }
 

@@ -88,7 +88,6 @@ public class RoundManager : NetworkBehaviour
     public NetworkVariable<double> QuestionEndTime =
         new(0, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
 
-    // Duration of the CURRENT question (can be shortened by a player state)
     public NetworkVariable<float> CurrentQuestionDuration =
         new(15f, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
 

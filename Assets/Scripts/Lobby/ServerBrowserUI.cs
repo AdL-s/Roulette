@@ -14,12 +14,14 @@ public class ServerBrowserUI : MonoBehaviour
     [SerializeField] private Button refreshButton;
     [SerializeField] private Button closeButton;
 
-    [Header("Join by code")]
-    [SerializeField] private TMP_InputField codeInput;
+    [Header("Join by code")] [SerializeField]
+    private TMP_InputField codeInput;
+
     [SerializeField] private Button joinByCodeButton;
     [SerializeField] private TMP_Text errorText;
 
     private readonly List<GameObject> spawnedRows = new();
+    private int _refreshId;
 
     private void Start()
     {
@@ -41,10 +43,16 @@ public class ServerBrowserUI : MonoBehaviour
 
     private async Task RefreshList()
     {
+        int id = ++_refreshId;
+
+        var lobbies = await LobbyManager.Instance.SearchLobbies(searchInput.text);
+
+
+        if (this == null || id != _refreshId) return;
+
         foreach (var row in spawnedRows) Destroy(row);
         spawnedRows.Clear();
 
-        var lobbies = await LobbyManager.Instance.SearchLobbies(searchInput.text);
         foreach (var lobby in lobbies)
         {
             var rowObj = Instantiate(serverRowPrefab, listContainer);

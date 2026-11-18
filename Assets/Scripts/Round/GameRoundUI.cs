@@ -1,9 +1,9 @@
+using System.Collections;
 using TMPro;
+using Unity.Collections;
 using Unity.Netcode;
 using UnityEngine;
 using UnityEngine.UI;
-using System.Collections;
-
 
 public class GameRoundUI : MonoBehaviour
 {
@@ -17,9 +17,11 @@ public class GameRoundUI : MonoBehaviour
     [SerializeField] private Color defaultColor = Color.white;
     [SerializeField] private Color correctColor = Color.green;
     [SerializeField] private Color wrongColor = Color.red;
-    
+
     private bool isDirty = false;
 
+    private RoundManager _round;
+    private bool _subscribed;
 
     private void Start()
     {
@@ -31,7 +33,12 @@ public class GameRoundUI : MonoBehaviour
 
         StartCoroutine(WaitForRoundManagerAndInit());
     }
-    
+
+    private void OnDestroy()
+    {
+        Unsubscribe();
+    }
+
     private void Update()
     {
         if (RoundManager.Instance == null) return;
@@ -47,9 +54,6 @@ public class GameRoundUI : MonoBehaviour
         double remaining = RoundManager.Instance.QuestionEndTime.Value - NetworkManager.Singleton.ServerTime.Time;
         timerFillBar.fillAmount = Mathf.Clamp01((float)(remaining / RoundManager.Instance.QuestionDuration));
     }
-
-
-    private void MarkDirty(object a = null, object b = null) => isDirty = true;
 
     private void Refresh()
     {
@@ -75,6 +79,7 @@ public class GameRoundUI : MonoBehaviour
                 answerButtons[i].interactable = true;
                 answerButtonBackgrounds[i].color = defaultColor;
             }
+
             timerFillBar.fillAmount = 1f;
         }
         else if (phase == GamePhase.Reveal)
@@ -99,7 +104,7 @@ public class GameRoundUI : MonoBehaviour
         RoundManager.Instance.SubmitAnswerServerRpc(index);
         foreach (var btn in answerButtons) btn.interactable = false;
     }
-    
+
     private IEnumerator WaitForRoundManagerAndInit()
     {
         while (RoundManager.Instance == null)
@@ -107,31 +112,65 @@ public class GameRoundUI : MonoBehaviour
             yield return null;
         }
 
-        if (RoundManager.Instance.IsReady)
-        {
-            HandleRoundManagerReady();
-        }
-        else
-        {
-            RoundManager.Instance.OnReady += HandleRoundManagerReady;
-        }
+        _round = RoundManager.Instance;
+
+        if (_round.IsReady) HandleRoundManagerReady();
+        else _round.OnReady += HandleRoundManagerReady;
     }
 
     private void HandleRoundManagerReady()
     {
-        RoundManager.Instance.CurrentQuestion.OnValueChanged += (_, _) => MarkDirty();
-        RoundManager.Instance.AnswerA.OnValueChanged += (_, _) => MarkDirty();
-        RoundManager.Instance.AnswerB.OnValueChanged += (_, _) => MarkDirty();
-        RoundManager.Instance.AnswerC.OnValueChanged += (_, _) => MarkDirty();
-        RoundManager.Instance.AnswerD.OnValueChanged += (_, _) => MarkDirty();
-        RoundManager.Instance.RoundOwnerClientId.OnValueChanged += (_, _) => MarkDirty();
-        RoundManager.Instance.CurrentPhase.OnValueChanged += (_, _) => MarkDirty();
-        RoundManager.Instance.RevealedCorrectIndex.OnValueChanged += (_, _) => MarkDirty();
-        
-        
+        if (_round == null) return;
 
+        _round.OnReady -= HandleRoundManagerReady;
+        Subscribe();
         Refresh();
     }
-    
-    
+
+
+    private void Subscribe()
+    {
+        if (_subscribed) return;
+        _subscribed = true;
+
+        _round.CurrentQuestion.OnValueChanged += OnText128Changed;
+        _round.AnswerA.OnValueChanged += OnText64Changed;
+        _round.AnswerB.OnValueChanged += OnText64Changed;
+        _round.AnswerC.OnValueChanged += OnText64Changed;
+        _round.AnswerD.OnValueChanged += OnText64Changed;
+        _round.RoundOwnerClientId.OnValueChanged += OnUlongChanged;
+        _round.CurrentPhase.OnValueChanged += OnPhaseChanged;
+        _round.RevealedCorrectIndex.OnValueChanged += OnIntChanged;
+    }
+
+    private void Unsubscribe()
+    {
+        if (_round == null)
+        {
+            _subscribed = false;
+            return;
+        }
+
+        _round.OnReady -= HandleRoundManagerReady;
+
+        if (_subscribed)
+        {
+            _round.CurrentQuestion.OnValueChanged -= OnText128Changed;
+            _round.AnswerA.OnValueChanged -= OnText64Changed;
+            _round.AnswerB.OnValueChanged -= OnText64Changed;
+            _round.AnswerC.OnValueChanged -= OnText64Changed;
+            _round.AnswerD.OnValueChanged -= OnText64Changed;
+            _round.RoundOwnerClientId.OnValueChanged -= OnUlongChanged;
+            _round.CurrentPhase.OnValueChanged -= OnPhaseChanged;
+            _round.RevealedCorrectIndex.OnValueChanged -= OnIntChanged;
+        }
+
+        _subscribed = false;
+    }
+
+    private void OnText128Changed(FixedString128Bytes oldValue, FixedString128Bytes newValue) => isDirty = true;
+    private void OnText64Changed(FixedString64Bytes oldValue, FixedString64Bytes newValue) => isDirty = true;
+    private void OnUlongChanged(ulong oldValue, ulong newValue) => isDirty = true;
+    private void OnPhaseChanged(GamePhase oldValue, GamePhase newValue) => isDirty = true;
+    private void OnIntChanged(int oldValue, int newValue) => isDirty = true;
 }

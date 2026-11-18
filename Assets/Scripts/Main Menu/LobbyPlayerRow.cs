@@ -9,9 +9,13 @@ public class LobbyPlayerRow : MonoBehaviour
     [SerializeField] private Image avatarImage;
     [SerializeField] private Image readyIcon;
 
-    [Header("Optional: swap sprites instead of just color")]
-    [SerializeField] private Sprite readySprite;
+    [Header("Optional: swap sprites instead of just color")] [SerializeField]
+    private Sprite readySprite;
+
     [SerializeField] private Sprite notReadySprite;
+
+    private Texture2D _avatarTexture;
+    private Sprite _avatarSprite;
 
     public void Setup(Friend member, bool isReady)
     {
@@ -19,7 +23,7 @@ public class LobbyPlayerRow : MonoBehaviour
         LoadAvatar(member.Id);
         SetReady(isReady);
     }
-    
+
     public void SetReady(bool isReady)
     {
         if (readySprite != null && notReadySprite != null)
@@ -31,18 +35,28 @@ public class LobbyPlayerRow : MonoBehaviour
     private async void LoadAvatar(SteamId steamId)
     {
         var avatar = await SteamFriends.GetLargeAvatarAsync(steamId);
-        if (avatar.HasValue)
-        {
-            var img = avatar.Value;
-            var texture = new Texture2D((int)img.Width, (int)img.Height, TextureFormat.RGBA32, false);
-            texture.LoadRawTextureData(img.Data);
-            texture.Apply();
 
-            FlipTextureVertically(texture);
+        if (this == null) return;
+        if (!avatar.HasValue) return;
 
-            avatarImage.sprite = Sprite.Create(texture, new Rect(0, 0, texture.width, texture.height), new Vector2(0.5f, 0.5f));
-        }
+        var img = avatar.Value;
+        _avatarTexture = new Texture2D((int)img.Width, (int)img.Height, TextureFormat.RGBA32, false);
+        _avatarTexture.LoadRawTextureData(img.Data);
+        _avatarTexture.Apply();
+
+        FlipTextureVertically(_avatarTexture);
+
+        _avatarSprite = Sprite.Create(_avatarTexture, new Rect(0, 0, _avatarTexture.width, _avatarTexture.height),
+            new Vector2(0.5f, 0.5f));
+        avatarImage.sprite = _avatarSprite;
     }
+
+    private void OnDestroy()
+    {
+        if (_avatarSprite != null) Destroy(_avatarSprite);
+        if (_avatarTexture != null) Destroy(_avatarTexture);
+    }
+
     private void FlipTextureVertically(Texture2D texture)
     {
         var pixels = texture.GetPixels32();

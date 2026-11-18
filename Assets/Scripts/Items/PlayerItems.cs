@@ -2,6 +2,7 @@ using System.Collections;
 using Unity.Netcode;
 using UnityEngine;
 
+
 public class PlayerItems : NetworkBehaviour
 {
     public const int MaxItems = 4;
@@ -14,7 +15,7 @@ public class PlayerItems : NetworkBehaviour
     private readonly GameObject[] _visuals = new GameObject[MaxItems];
     private readonly int[] _visualIds = new int[MaxItems] { -1, -1, -1, -1 };
 
-    private bool _useInProgress; // server-side guard against double-use
+    private bool _useInProgress;
 
     private void Awake()
     {
@@ -53,15 +54,51 @@ public class PlayerItems : NetworkBehaviour
                 Destroy(_visuals[i]);
     }
 
-    private void OnItemsChanged(NetworkListEvent<int> _) => RefreshSlots();
+    private void OnItemsChanged(NetworkListEvent<int> change)
+    {
+        if (change.Type == NetworkListEvent<int>.EventType.RemoveAt)
+            ShiftVisualsDown(change.Index);
 
-    // Finds a player's PlayerItems on any machine (used for effects on the target)
+        RefreshSlots();
+    }
+
+    private void ShiftVisualsDown(int removedIndex)
+    {
+        if (removedIndex < 0 || removedIndex >= MaxItems) return;
+
+        if (_visuals[removedIndex] != null) Destroy(_visuals[removedIndex]);
+
+        for (int i = removedIndex; i < MaxItems - 1; i++)
+        {
+            _visuals[i] = _visuals[i + 1];
+            _visualIds[i] = _visualIds[i + 1];
+
+            if (_visuals[i] == null || slots[i] == null) continue;
+
+            _visuals[i].transform.SetParent(slots[i], false);
+            var vis = _visuals[i].GetComponent<ItemVisual>();
+            if (vis != null) vis.SetSlot(i);
+        }
+
+        _visuals[MaxItems - 1] = null;
+        _visualIds[MaxItems - 1] = -1;
+    }
+
     public static PlayerItems Find(ulong clientId)
     {
         foreach (var p in FindObjectsByType<PlayerItems>(FindObjectsSortMode.None))
             if (p.OwnerClientId == clientId)
                 return p;
         return null;
+    }
+
+    public void ClearItems()
+    {
+        if (!IsServer) return;
+
+        StopAllCoroutines();
+        _useInProgress = false;
+        _items.Clear();
     }
 
     public bool TryAddItem(int itemIndex)
@@ -72,6 +109,7 @@ public class PlayerItems : NetworkBehaviour
         _items.Add(itemIndex);
         return true;
     }
+
 
     public void RequestUse(int slot, ulong targetClientId) => UseItemServerRpc(slot, targetClientId);
 
@@ -122,7 +160,7 @@ public class PlayerItems : NetworkBehaviour
         {
             position = _visuals[slot].transform.position;
             var vis = _visuals[slot].GetComponent<ItemVisual>();
-            if (vis != null) vis.PlayUse();
+            if (vis != null) vis.PlayUse(def.useAnimDuration);
         }
 
         Transform target = null;
@@ -134,6 +172,7 @@ public class PlayerItems : NetworkBehaviour
 
         def.PlayUseEffects(position, target, pitch);
     }
+
 
     private void RefreshSlots()
     {
@@ -173,6 +212,11 @@ public class PlayerItems : NetworkBehaviour
             var vis = _visuals[i].GetComponent<ItemVisual>();
             if (vis == null) vis = _visuals[i].AddComponent<ItemVisual>();
             vis.Init(this, i, def);
+
+            Debug.Log(
+                $"[PlayerItems] Spawned '{_visuals[i].name}' in slot '{slots[i].name}' of client {OwnerClientId}. " +
+                $"World pos {_visuals[i].transform.position}, world scale {_visuals[i].transform.lossyScale}, " +
+                $"layer {LayerMask.LayerToName(_visuals[i].layer)}.");
         }
     }
 }

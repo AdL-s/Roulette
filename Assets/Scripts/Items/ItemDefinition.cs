@@ -1,5 +1,11 @@
 using UnityEngine;
 
+// PARENT of all items. Never create an asset of this class directly.
+// Item types:
+//   SelfItemDefinition   - type 1: used on yourself, click the item = used
+//   TargetItemDefinition - type 2: used on another player, click the item, then click a player
+// To add a new item: inherit from one of the two types, add [CreateAssetMenu], create the asset,
+// then add the asset to the ItemSystem item list in the scene.
 public abstract class ItemDefinition : ScriptableObject
 {
     [Header("Info")] public string itemName;
@@ -12,7 +18,11 @@ public abstract class ItemDefinition : ScriptableObject
     [Tooltip("Model shown in the slot. Needs a Collider. Optional Animator with triggers 'Spawn' and 'Use'.")]
     public GameObject prefab;
 
-    [Tooltip("How long the Use animation plays before the item is removed from the inventory")] [Min(0f)]
+    [Tooltip("How long the item dissolves in when it appears")] [Min(0f)]
+    public float appearDuration = 0.6f;
+
+    [Tooltip("How long the Use animation and the dissolve out play before the item is removed from the inventory")]
+    [Min(0f)]
     public float useAnimDuration = 0.5f;
 
     public AudioClip useSound;
@@ -35,10 +45,13 @@ public abstract class ItemDefinition : ScriptableObject
 
     public abstract bool RequiresTarget { get; }
 
+    // SERVER ONLY. Return false to reject the use (the item is NOT consumed).
     public virtual bool CanUse(ulong userClientId, ulong targetClientId) => true;
 
+    // SERVER ONLY. For self items targetClientId == userClientId.
     public abstract void Apply(ulong userClientId, ulong targetClientId);
 
+    // SERVER ONLY. Rolled once per use and sent to all clients.
     public float RollPitch() => Random.Range(minPitch, maxPitch);
 
     public void PlayUseEffects(Vector3 itemPosition, Transform target, float pitch)
@@ -51,6 +64,7 @@ public abstract class ItemDefinition : ScriptableObject
         if (targetVfx != null && target != null)
             Destroy(Instantiate(targetVfx, target.position, Quaternion.identity, target), vfxLifetime);
     }
+
 
     private void PlayUseSound(Vector3 position, float pitch)
     {
@@ -68,6 +82,7 @@ public abstract class ItemDefinition : ScriptableObject
     }
 }
 
+// TYPE 1: used on yourself
 public abstract class SelfItemDefinition : ItemDefinition
 {
     public sealed override bool RequiresTarget => false;
@@ -76,6 +91,7 @@ public abstract class SelfItemDefinition : ItemDefinition
     protected abstract void ApplyToSelf(ulong userClientId);
 }
 
+// TYPE 2: used on another player
 public abstract class TargetItemDefinition : ItemDefinition
 {
     public sealed override bool RequiresTarget => true;

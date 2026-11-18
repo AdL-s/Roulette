@@ -15,6 +15,13 @@ public class SpawnPointManager : MonoBehaviour
             .Select(go => go.transform)
             .ToArray();
 
+        if (spawnPoints.Length == 0)
+        {
+            Debug.LogError(
+                "[SpawnPointManager] No objects with the tag 'SpawnPoint' in the scene. No players spawned.");
+            return;
+        }
+
         SpawnAllPlayers();
     }
 
@@ -25,7 +32,11 @@ public class SpawnPointManager : MonoBehaviour
         {
             Transform spawnPoint = spawnPoints[index % spawnPoints.Length];
             var instance = Instantiate(playerPrefab, spawnPoint.position, spawnPoint.rotation);
-            instance.GetComponent<NetworkObject>().SpawnAsPlayerObject(clientId);
+
+            var networkObject = instance.GetComponent<NetworkObject>();
+            networkObject.DestroyWithScene = true;
+            networkObject.SpawnAsPlayerObject(clientId);
+
             index++;
         }
     }
