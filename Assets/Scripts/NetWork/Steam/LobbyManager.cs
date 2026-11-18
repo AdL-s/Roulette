@@ -10,21 +10,23 @@ using System.Linq;
 
 public class LobbyManager : MonoBehaviour
 {
+    public const int MaxPlayers = 4;
+
     public static LobbyManager Instance { get; private set; }
     private Lobby currentLobby;
     public Dictionary<ulong, SteamId> ClientSteamIds { get; } = new Dictionary<ulong, SteamId>();
 
-    public const int MaxPlayers = 4;
-    public bool IsGameInProgress { get; private set; }
-
     public Lobby CurrentLobby => currentLobby;
+
+    public bool IsGameInProgress { get; private set; }
 
     private string pendingLobbyName;
     private bool pendingFriendsOnly;
     private bool pendingPrivate;
 
-
     [SerializeField] private GameObject lobbyPlayerStatePrefab;
+
+    private bool _netCallbacksSubscribed;
 
     private void Awake()
     {
@@ -38,17 +40,65 @@ public class LobbyManager : MonoBehaviour
 
         SteamMatchmaking.OnLobbyCreated += OnLobbyCreated;
         SteamMatchmaking.OnLobbyEntered += OnLobbyEntered;
-        SteamMatchmaking.OnLobbyMemberJoined += (lobby, friend) =>
-            Debug.Log($"{friend.Name} joined the lobby");
+        SteamMatchmaking.OnLobbyMemberJoined += OnLobbyMemberJoined;
         SteamFriends.OnGameLobbyJoinRequested += OnGameLobbyJoinRequested;
     }
 
     private void Start()
     {
-        NetworkManager.Singleton.NetworkConfig.ConnectionApproval = true;
-        NetworkManager.Singleton.ConnectionApprovalCallback = ApprovalCheck;
-        NetworkManager.Singleton.OnClientConnectedCallback += HandleClientConnected;
-        NetworkManager.Singleton.OnClientDisconnectCallback += HandleClientDisconnected;
+        if (Instance != this) return;
+
+        var nm = NetworkManager.Singleton;
+        nm.NetworkConfig.ConnectionApproval = true;
+        nm.ConnectionApprovalCallback = ApprovalCheck;
+        nm.OnClientConnectedCallback += HandleClientConnected;
+        nm.OnClientDisconnectCallback += HandleClientDisconnected;
+        _netCallbacksSubscribed = true;
+    }
+
+    private void OnDestroy()
+    {
+        if (Instance != this) return;
+
+        SteamMatchmaking.OnLobbyCreated -= OnLobbyCreated;
+        SteamMatchmaking.OnLobbyEntered -= OnLobbyEntered;
+        SteamMatchmaking.OnLobbyMemberJoined -= OnLobbyMemberJoined;
+        SteamFriends.OnGameLobbyJoinRequested -= OnGameLobbyJoinRequested;
+
+        var nm = NetworkManager.Singleton;
+        if (nm != null && _netCallbacksSubscribed)
+        {
+            nm.OnClientConnectedCallback -= HandleClientConnected;
+            nm.OnClientDisconnectCallback -= HandleClientDisconnected;
+            if (nm.ConnectionApprovalCallback == ApprovalCheck) nm.ConnectionApprovalCallback = null;
+        }
+
+        _netCallbacksSubscribed = false;
+
+        UnsubscribeSceneEvents();
+        Instance = null;
+    }
+
+    private void SubscribeSceneEvents()
+    {
+        var sceneManager = NetworkManager.Singleton.SceneManager;
+        if (sceneManager == null || MainMenu.Instance == null) return;
+
+        sceneManager.OnLoadEventCompleted -= MainMenu.Instance.OnSceneLoadCompleted;
+        sceneManager.OnLoadEventCompleted += MainMenu.Instance.OnSceneLoadCompleted;
+    }
+
+    private void UnsubscribeSceneEvents()
+    {
+        var nm = NetworkManager.Singleton;
+        if (nm == null || nm.SceneManager == null || MainMenu.Instance == null) return;
+
+        nm.SceneManager.OnLoadEventCompleted -= MainMenu.Instance.OnSceneLoadCompleted;
+    }
+
+    private void OnLobbyMemberJoined(Lobby lobby, Friend friend)
+    {
+        Debug.Log($"{friend.Name} joined the lobby");
     }
 
     private void ApprovalCheck(NetworkManager.ConnectionApprovalRequest request,
@@ -94,25 +144,10 @@ public class LobbyManager : MonoBehaviour
         currentLobby.SetJoinable(!inProgress);
     }
 
-    private void HandleClientDisconnected(ulong clientId)
-    {
-        if (NetworkManager.Singleton.IsServer)
-        {
-            ClientSteamIds.Remove(clientId);
-            return;
-        }
-
-        // Client side: this client lost its connection (host left, rejected, kicked)
-        Debug.Log($"Disconnected from host: {NetworkManager.Singleton.DisconnectReason}");
-        LeaveCurrentSessionIfAny();
-
-        if (UnityEngine.SceneManagement.SceneManager.GetActiveScene().name == "GameScene")
-            UnityEngine.SceneManagement.SceneManager.LoadScene("MainMenu", LoadSceneMode.Single);
-    }
-
     public async void HostLobby(string lobbyName, bool friendsOnly, bool isPrivate)
     {
         IsGameInProgress = false;
+
         pendingLobbyName = string.IsNullOrWhiteSpace(lobbyName) ? "Lobby" : lobbyName;
         pendingFriendsOnly = friendsOnly;
         pendingPrivate = isPrivate;
@@ -139,9 +174,8 @@ public class LobbyManager : MonoBehaviour
         MainMenu.Instance.SetLobby(lobby);
         NetworkManager.Singleton.StartHost();
 
-        NetworkManager.Singleton.SceneManager.OnLoadEventCompleted += MainMenu.Instance.OnSceneLoadCompleted;
+        SubscribeSceneEvents();
     }
-
 
     private void OnLobbyEntered(Lobby lobby)
     {
@@ -163,7 +197,7 @@ public class LobbyManager : MonoBehaviour
         NetworkManager.Singleton.StartClient();
         Debug.Log("OnLobbyEntered: StartClient() called.");
 
-        NetworkManager.Singleton.SceneManager.OnLoadEventCompleted += MainMenu.Instance.OnSceneLoadCompleted;
+        SubscribeSceneEvents();
     }
 
     public void JoinLobbyDirect(Lobby lobby)
@@ -190,9 +224,6 @@ public class LobbyManager : MonoBehaviour
         }
     }
 
-    // Single public entry point for "leave whatever lobby/session we're currently in".
-    // UI code (e.g. the Leave button) should call this instead of poking NetworkManager/Lobby
-    // directly, so the cleanup (including reinitializing Steam - see below) only lives in one place.
     public void LeaveLobby()
     {
         LeaveCurrentSessionIfAny();
@@ -242,11 +273,9 @@ public class LobbyManager : MonoBehaviour
 
         if (NetworkManager.Singleton.IsHost || NetworkManager.Singleton.IsClient)
         {
+            UnsubscribeSceneEvents();
             NetworkManager.Singleton.Shutdown();
 
-            // FacepunchTransport.Shutdown() calls SteamClient.Shutdown() as part of tearing down
-            // the network session. That kills the global Steam client, which breaks everything
-            // that needs Steam afterwards (lobby browser, invites, etc.) - so bring it back up.
             SteamManager.Instance.EnsureInitialized();
         }
 
@@ -274,9 +303,26 @@ public class LobbyManager : MonoBehaviour
         }
     }
 
+    private void HandleClientDisconnected(ulong clientId)
+    {
+        if (NetworkManager.Singleton.IsServer)
+        {
+            ClientSteamIds.Remove(clientId);
+            return;
+        }
+
+        // Client side: this client lost its connection (host left, rejected, kicked)
+        Debug.Log($"Disconnected from host: {NetworkManager.Singleton.DisconnectReason}");
+        LeaveCurrentSessionIfAny();
+
+        if (SceneManager.GetActiveScene().name == "GameScene")
+            SceneManager.LoadScene("MainMenu", LoadSceneMode.Single);
+    }
+
     public void ClearCurrentLobby()
     {
         currentLobby = default;
+        IsGameInProgress = false;
     }
 
     public void SetLobbyPrivate(bool isPrivate)

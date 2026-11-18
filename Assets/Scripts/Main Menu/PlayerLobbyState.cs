@@ -1,5 +1,4 @@
 using Unity.Netcode;
-using Steamworks;
 
 public class PlayerLobbyState : NetworkBehaviour
 {
@@ -17,18 +16,29 @@ public class PlayerLobbyState : NetworkBehaviour
 
     public override void OnNetworkSpawn()
     {
-        IsReady.OnValueChanged += (oldVal, newVal) =>
-        {
-            if (MainMenu.Instance != null) MainMenu.Instance.RefreshPlayerList();
-            if (IsOwner && MainMenu.Instance != null) MainMenu.Instance.UpdateReadyButtonText(newVal);
-        };
-
-        SteamId.OnValueChanged += (oldVal, newVal) =>
-        {
-            if (MainMenu.Instance != null) MainMenu.Instance.RefreshPlayerList();
-        };
+        IsReady.OnValueChanged += OnReadyChanged;
+        SteamId.OnValueChanged += OnSteamIdChanged;
     }
-    
+
+    public override void OnNetworkDespawn()
+    {
+        IsReady.OnValueChanged -= OnReadyChanged;
+        SteamId.OnValueChanged -= OnSteamIdChanged;
+    }
+
+    private void OnReadyChanged(bool oldVal, bool newVal)
+    {
+        if (MainMenu.Instance == null) return;
+
+        MainMenu.Instance.RefreshPlayerList();
+        if (IsOwner) MainMenu.Instance.UpdateReadyButtonText(newVal);
+    }
+
+    private void OnSteamIdChanged(ulong oldVal, ulong newVal)
+    {
+        if (MainMenu.Instance != null) MainMenu.Instance.RefreshPlayerList();
+    }
+
     [ClientRpc]
     public void ResetReadyClientRpc()
     {

@@ -15,6 +15,9 @@ public class GameUIManager : MonoBehaviour
 
     public bool IsPaused { get; private set; }
 
+    private RoundManager _round;
+    private bool _subscribed;
+
     private void Awake()
     {
         if (Instance != null && Instance != this)
@@ -22,16 +25,37 @@ public class GameUIManager : MonoBehaviour
             Destroy(gameObject);
             return;
         }
+
         Instance = this;
     }
 
     private void Start()
     {
+        if (Instance != this) return;
+
         quitButton.onClick.AddListener(OnQuitClicked);
         resumeButton.onClick.AddListener(TogglePause);
         pausePanel.SetActive(false);
 
         StartCoroutine(WaitForRoundManagerAndSubscribe());
+    }
+
+    private void OnDestroy()
+    {
+        if (Instance != this) return;
+
+        if (_round != null && _subscribed)
+        {
+            _round.CurrentPhase.OnValueChanged -= OnPhaseChanged;
+            _round.RoundOwnerClientId.OnValueChanged -= OnOwnerChanged;
+        }
+
+        _subscribed = false;
+
+        if (quitButton != null) quitButton.onClick.RemoveListener(OnQuitClicked);
+        if (resumeButton != null) resumeButton.onClick.RemoveListener(TogglePause);
+
+        Instance = null;
     }
 
     private IEnumerator WaitForRoundManagerAndSubscribe()
@@ -41,9 +65,14 @@ public class GameUIManager : MonoBehaviour
             yield return null;
         }
 
-        RoundManager.Instance.CurrentPhase.OnValueChanged += (_, _) => CheckForceClosePause();
-        RoundManager.Instance.RoundOwnerClientId.OnValueChanged += (_, _) => CheckForceClosePause();
+        _round = RoundManager.Instance;
+        _round.CurrentPhase.OnValueChanged += OnPhaseChanged;
+        _round.RoundOwnerClientId.OnValueChanged += OnOwnerChanged;
+        _subscribed = true;
     }
+
+    private void OnPhaseChanged(GamePhase oldValue, GamePhase newValue) => CheckForceClosePause();
+    private void OnOwnerChanged(ulong oldValue, ulong newValue) => CheckForceClosePause();
 
     private void Update()
     {
@@ -62,7 +91,6 @@ public class GameUIManager : MonoBehaviour
 
     private void TogglePause()
     {
-        // Block opening the pause menu while you're the one answering
         if (!IsPaused && IsLocalPlayerAnsweringNow())
         {
             Debug.Log("Can't pause while answering the question.");
@@ -74,7 +102,6 @@ public class GameUIManager : MonoBehaviour
         NotifyLocalPlayer();
     }
 
-    // If a paused player becomes the round owner during Question phase, force-close the pause menu
     private void CheckForceClosePause()
     {
         if (IsPaused && IsLocalPlayerAnsweringNow())

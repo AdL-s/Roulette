@@ -23,7 +23,7 @@ public class PlayerCombat : NetworkBehaviour
         if (!isMyActionTurn) return;
         if (ItemSystem.BlockShooting) return;
 
-        if (Mouse.current.leftButton.wasPressedThisFrame)
+        if (Mouse.current != null && Mouse.current.leftButton.wasPressedThisFrame)
             TryShootAtLookedTarget();
     }
 
@@ -32,29 +32,12 @@ public class PlayerCombat : NetworkBehaviour
         if (playerCamera == null) return;
 
         Ray ray = new Ray(playerCamera.transform.position, playerCamera.transform.forward);
+        if (!Physics.Raycast(ray, out RaycastHit hit, maxShootDistance, shootableLayers)) return;
 
-        if (Physics.Raycast(ray, out RaycastHit hit, maxShootDistance, shootableLayers))
-        {
-            if (!hit.collider.CompareTag("Player")) return;
-            var highlight = hit.collider.GetComponentInParent<HighLight_Controller>();
+        var target = hit.collider.GetComponentInParent<NetworkObject>();
+        if (target == null || !target.IsPlayerObject) return;
+        if (target.OwnerClientId == NetworkManager.Singleton.LocalClientId) return;
 
-            if (highlight.block.GetFloat("_EmissionIntensity") >= 5.0)
-            {
-                return;
-            }
-            else if (highlight.block.GetFloat("_EmissionIntensity") < 5.0)
-            {
-                highlight.block.SetFloat("_EmissionIntensity",
-                    highlight.block.GetFloat("_EmissionIntensity") + 1 * Time.deltaTime);
-            }
-
-
-            var targetNetObj = hit.collider.GetComponentInParent<NetworkObject>();
-            if (targetNetObj == null) return;
-            if (targetNetObj.OwnerClientId == NetworkManager.Singleton.LocalClientId)
-                return; // LMB can't hit self, use RMB for that
-
-            RoundManager.Instance.TryAttackServerRpc(targetNetObj.OwnerClientId);
-        }
+        RoundManager.Instance.TryAttackServerRpc(target.OwnerClientId);
     }
 }

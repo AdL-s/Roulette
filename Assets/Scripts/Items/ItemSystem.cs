@@ -19,11 +19,51 @@ public class ItemSystem : MonoBehaviour
     [SerializeField]
     private LayerMask targetLayerMask = ~0;
 
+    [Header("Item hover effect (only the owner, only in their action phase)")]
+    [Tooltip(
+        "Full effect when the crosshair is on the item's collider or this close to it (fraction of screen height)")]
+    [SerializeField, Range(0f, 0.5f)]
+    private float hoverNearRadius = 0.01f;
+
+    [Tooltip("No effect beyond this distance from the item's collider (fraction of screen height)")]
+    [SerializeField, Range(0.01f, 1f)]
+    private float hoverFarRadius = 0.1f;
+
+    [SerializeField, Min(0.1f)] private float hoverFadeSpeed = 6f;
+
+    [Tooltip("Extra scale at full hover. 0.15 = 15% bigger")] [SerializeField, Range(0f, 1f)]
+    private float hoverScale = 0.15f;
+
+    [Tooltip("Lift at full hover, in meters (world up)")] [SerializeField, Min(0f)]
+    private float hoverLift = 0.08f;
+
+    [Tooltip("Up/down bob while hovered, in meters")] [SerializeField, Min(0f)]
+    private float hoverBobAmplitude = 0.015f;
+
+    [SerializeField, Min(0f)] private float hoverBobSpeed = 3f;
+
+    [ColorUsage(false, true)] [SerializeField]
+    private Color hoverGlowColor = new Color(1f, 0.85f, 0.55f);
+
+    [SerializeField, Min(0f)] private float hoverGlowIntensity = 1.5f;
+
+    public float HoverNearRadius => hoverNearRadius;
+    public float HoverFarRadius => hoverFarRadius;
+    public float HoverFadeSpeed => hoverFadeSpeed;
+    public float HoverScale => hoverScale;
+    public float HoverLift => hoverLift;
+    public float HoverBobAmplitude => hoverBobAmplitude;
+    public float HoverBobSpeed => hoverBobSpeed;
+    public Color HoverGlowColor => hoverGlowColor;
+    public float HoverGlowIntensity => hoverGlowIntensity;
+
     private ItemVisual _hovered;
 
+    // Tooltip state (local UI, only ever shown on this client)
     private ItemVisual _tooltipFor;
     private bool _tooltipVisible;
 
+    // Targeting mode (type 2 items): item selected, waiting for a click on a player
     private PlayerItems _targetingOwner;
     private int _targetingSlot;
 
@@ -95,6 +135,7 @@ public class ItemSystem : MonoBehaviour
         return true;
     }
 
+
     private string DescribePool()
     {
         if (items == null || items.Length == 0) return "The Items list on ItemSystem is empty.";
@@ -129,6 +170,10 @@ public class ItemSystem : MonoBehaviour
 
         return -1;
     }
+
+
+    public bool IsSelected(PlayerItems owner, int slot) =>
+        _targetingOwner != null && _targetingOwner == owner && _targetingSlot == slot;
 
     public void BeginTargeting(PlayerItems owner, int slot)
     {
@@ -176,7 +221,7 @@ public class ItemSystem : MonoBehaviour
                 return;
             }
 
-            EndTargeting(); // phase changed or turn ended
+            EndTargeting();
         }
 
         UpdateHover(cam);
@@ -186,13 +231,13 @@ public class ItemSystem : MonoBehaviour
     {
         if (Mouse.current.rightButton.wasPressedThisFrame)
         {
-            _consumedFrame = Time.frameCount; // stops the self-shoot on right click
+            _consumedFrame = Time.frameCount;
             EndTargeting();
             return;
         }
 
         if (!Mouse.current.leftButton.wasPressedThisFrame) return;
-        _consumedFrame = Time.frameCount; // stops the shot on this click
+        _consumedFrame = Time.frameCount;
 
         Ray ray = cam.ScreenPointToRay(PointerPosition);
         RaycastHit[] hits = Physics.RaycastAll(ray, rayDistance, targetLayerMask);
@@ -201,7 +246,7 @@ public class ItemSystem : MonoBehaviour
         PlayerItems target = null;
         foreach (var hit in hits)
         {
-            var player = hit.collider.GetComponentInParent<PlayerItems>(); // PlayerItems is on the player prefab
+            var player = hit.collider.GetComponentInParent<PlayerItems>();
             if (player != null && player.IsOwner) continue;
             target = player;
             break;
